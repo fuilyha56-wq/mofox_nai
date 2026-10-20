@@ -1,0 +1,12 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.coverage
+data/
+dist/
+build/
+*.mfp
+*.zip
+.venv/
+venv/
