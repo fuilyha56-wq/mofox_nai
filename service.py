@@ -12,7 +12,8 @@ import hashlib
 import re
 from io import BytesIO
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit, urlunsplit
+from zipfile import BadZipFile, ZipFile
 
 import httpx
 
@@ -44,9 +45,82 @@ class MofoxNaiService:
 
     @staticmethod
     def _api_url(base_url: str, suffix: str) -> str:
-        """拼接 OpenAI 兼容 API 路径。"""
+        """拼接 API 路径，同时保留根地址上的前缀与查询参数。"""
 
-        return f"{base_url.rstrip('/')}/{suffix.lstrip('/')}"
+        parts = urlsplit(base_url.strip())
+        base_path = parts.path.rstrip("/")
+        suffix_path = "/" + suffix.strip("/")
+        if base_path.casefold().endswith(suffix_path.casefold()):
+            path = base_path
+        else:
+            path = f"{base_path}{suffix_path}"
+        return urlunsplit((parts.scheme, parts.netloc, path, parts.query, parts.fragment))
+
+    def _generation_api_format(self) -> str:
+        """解析生图协议；NAI 原生端点或裸 NAI 模型地址自动使用原生请求体。"""
+
+        generation = self.config.generation
+        configured = generation.api_format
+        if configured != "auto":
+            return configured
+        base = generation.base_url.strip().casefold()
+        path = urlsplit(base).path.rstrip("/")
+        if path.endswith("/ai/generate-image"):
+            return "novelai"
+        has_openai_version = bool(re.search(r"/v\d+(?:/|$)", path))
+        is_nai_model = generation.model.strip().casefold().startswith("nai-diffusion-")
+        return "novelai" if is_nai_model and not has_openai_version else "openai"
+
+    @staticmethod
+    def _native_image_request(
+        model: str,
+        prompt: str,
+        negative_prompt: str,
+        width: int,
+        height: int,
+        steps: int,
+        scale: float,
+    ) -> dict[str, Any]:
+        """构造 NovelAI 图像 API 使用的原生请求结构。"""
+
+        parameters: dict[str, Any] = {
+            "params_version": 3,
+            "width": width,
+            "height": height,
+            "steps": steps,
+            "scale": scale,
+            "sampler": "k_euler_ancestral",
+            "noise_schedule": "karras",
+            "n_samples": 1,
+            "ucPreset": 0,
+            "qualityToggle": True,
+            "sm": False,
+            "sm_dyn": False,
+            "dynamic_thresholding": False,
+            "cfg_rescale": 0,
+            "legacy": False,
+            "negative_prompt": negative_prompt,
+            "prompt": prompt,
+        }
+        if re.search(r"nai[-_ ]?diffusion[-_ ]?(?:4(?:[-_. ]?5)?|5)", model, re.IGNORECASE):
+            parameters["v4_prompt"] = {
+                "caption": {"base_caption": prompt, "char_captions": []},
+                "use_coords": False,
+                "use_order": False,
+                "legacy_uc": False,
+            }
+            parameters["v4_negative_prompt"] = {
+                "caption": {"base_caption": negative_prompt, "char_captions": []},
+                "use_coords": False,
+                "use_order": False,
+                "legacy_uc": False,
+            }
+        return {
+            "action": "generate",
+            "input": prompt,
+            "model": model,
+            "parameters": parameters,
+        }
 
     @staticmethod
     def _looks_like_tags(prompt: str) -> bool:
@@ -156,43 +230,105 @@ class MofoxNaiService:
         negative_prompt: str = "",
         watermark_text: str | None = None,
     ) -> tuple[bytes, str]:
-        """调用 OpenAI 兼容图像生成接口并应用可选水印。"""
+        """调用选定的生图协议并应用可选水印。"""
 
         generation = self.config.generation
         if not generation.base_url.strip() or not generation.model.strip():
             raise ValueError("请先配置 [generation].base_url 和 [generation].model")
         prepared_prompt = await self.prepare_prompt(prompt)
-        body = {
-            "model": generation.model,
-            "prompt": prepared_prompt,
-            "negative_prompt": negative_prompt.strip() or generation.negative_prompt,
-            "width": generation.width,
-            "height": generation.height,
-            "size": f"{generation.width}x{generation.height}",
-            "steps": generation.steps,
-            "scale": generation.scale,
-            "response_format": "b64_json",
-        }
-        async with httpx.AsyncClient(timeout=generation.timeout) as client:
-            response = await client.post(
-                self._api_url(generation.base_url, "/images/generations"),
-                headers=self._headers(generation.api_key),
-                json=body,
+        final_negative_prompt = negative_prompt.strip() or generation.negative_prompt
+        api_format = self._generation_api_format()
+        if api_format == "novelai":
+            endpoint = self._api_url(generation.base_url, "/ai/generate-image")
+            headers = {
+                **self._headers(generation.api_key),
+                "Accept": "application/json",
+            }
+            body = self._native_image_request(
+                generation.model,
+                prepared_prompt,
+                final_negative_prompt,
+                generation.width,
+                generation.height,
+                generation.steps,
+                generation.scale,
             )
+        else:
+            endpoint = self._api_url(generation.base_url, "/images/generations")
+            headers = self._headers(generation.api_key)
+            body = {
+                "model": generation.model,
+                "prompt": prepared_prompt,
+                "negative_prompt": final_negative_prompt,
+                "width": generation.width,
+                "height": generation.height,
+                "size": f"{generation.width}x{generation.height}",
+                "steps": generation.steps,
+                "scale": generation.scale,
+                "response_format": "b64_json",
+            }
+        async with httpx.AsyncClient(timeout=generation.timeout) as client:
+            response = await client.post(endpoint, headers=headers, json=body)
             response.raise_for_status()
-            result = response.json()
-            image_data = await self._extract_generated_image(result, client)
+            if api_format == "novelai":
+                image_data = await self._extract_native_image(response, client)
+            else:
+                image_data = await self._extract_generated_image(response.json(), client)
         processed = apply_watermark(image_data, self.config, watermark_text)
         return processed, prepared_prompt
+
+    async def _extract_native_image(self, response: httpx.Response, client: httpx.AsyncClient) -> bytes:
+        """读取 NovelAI 原生接口的 JSON、ZIP 或直接图片响应。"""
+
+        content = response.content
+        content_type = response.headers.get("content-type", "").casefold()
+        if "zip" in content_type or content.startswith(b"PK\x03\x04"):
+            return self._extract_zip_image(content)
+        is_webp = content.startswith(b"RIFF") and content[8:12] == b"WEBP"
+        if content_type.startswith("image/") or content.startswith(
+            (b"\x89PNG\r\n\x1a\n", b"\xff\xd8\xff")
+        ) or is_webp:
+            return self._validate_image_bytes(content)
+        return await self._extract_generated_image(response.json(), client)
+
+    def _validate_image_bytes(self, image_data: bytes) -> bytes:
+        """检查响应图片非空且在插件配置的大小限制内。"""
+
+        if not image_data or len(image_data) > self.config.archive.max_image_bytes:
+            raise ValueError("生成图片为空或超出 archive.max_image_bytes 限制")
+        return image_data
+
+    def _extract_zip_image(self, content: bytes) -> bytes:
+        """从 NovelAI ZIP 响应中安全读取第一张图片，不解压到磁盘。"""
+
+        try:
+            with ZipFile(BytesIO(content)) as archive:
+                members = [name for name in archive.namelist() if not name.endswith("/")]
+                image_names = [
+                    name for name in members if name.casefold().endswith((".png", ".webp", ".jpg", ".jpeg"))
+                ]
+                if not image_names:
+                    image_names = members[:1]
+                if not image_names:
+                    raise ValueError("NovelAI ZIP 响应中没有图片文件")
+                with archive.open(image_names[0]) as image_file:
+                    image_data = image_file.read(self.config.archive.max_image_bytes + 1)
+        except BadZipFile as error:
+            raise ValueError("NovelAI 返回了无效的 ZIP 图片数据") from error
+        return self._validate_image_bytes(image_data)
 
     async def _extract_generated_image(
         self, response_data: dict[str, Any], client: httpx.AsyncClient
     ) -> bytes:
-        """兼容 OpenAI b64_json、data URL 和结果 URL。"""
+        """兼容 OpenAI b64_json 与 NovelAI images[].image Base64 响应。"""
 
         items = response_data.get("data") or response_data.get("images") or []
-        if not isinstance(items, list) or not items or not isinstance(items[0], dict):
-            raise ValueError("生图接口响应缺少 data[0]")
+        if not isinstance(items, list) or not items:
+            raise ValueError("生图接口响应缺少 data[0] 或 images[0]")
+        if isinstance(items[0], str):
+            items = [{"image": items[0]}]
+        if not isinstance(items[0], dict):
+            raise ValueError("生图接口响应中的图片条目格式无效")
         item = items[0]
         encoded = item.get("b64_json") or item.get("image")
         if isinstance(encoded, str):
@@ -202,18 +338,14 @@ class MofoxNaiService:
                 image_data = base64.b64decode(encoded, validate=True)
             except (ValueError, binascii.Error) as error:
                 raise ValueError("生图接口返回的 Base64 图片无效") from error
-            if not image_data or len(image_data) > self.config.archive.max_image_bytes:
-                raise ValueError("生成图片为空或超出 archive.max_image_bytes 限制")
-            return image_data
+            return self._validate_image_bytes(image_data)
         image_url = item.get("url")
         if isinstance(image_url, str) and image_url.startswith(("https://", "http://")):
             image_response = await client.get(image_url)
             image_response.raise_for_status()
             image_data = image_response.content
-            if not image_data or len(image_data) > self.config.archive.max_image_bytes:
-                raise ValueError("生成图片为空或超出归档大小限制")
-            return image_data
-        raise ValueError("生图接口响应中既没有 b64_json，也没有可访问的 url")
+            return self._validate_image_bytes(image_data)
+        raise ValueError("生图接口响应中既没有图片 Base64，也没有可访问的 url")
 
     @staticmethod
     def _message_text(response_data: dict[str, Any]) -> str:
@@ -491,7 +623,7 @@ class MofoxNaiService:
         if options.username.strip() and options.api_key.strip():
             auth = (options.username.strip(), options.api_key.strip())
         base_url = options.base_url.rstrip("/")
-        headers = {"User-Agent": "MoFox-NAI/0.1.2 (plugin; contact repository maintainer)"}
+        headers = {"User-Agent": "MoFox-NAI/0.1.4 (plugin; contact repository maintainer)"}
         async with httpx.AsyncClient(timeout=self.config.models.timeout) as client:
             response = await client.get(
                 f"{base_url}/posts.json",

@@ -7,7 +7,8 @@
 | `plugin` | `enabled` | `true` | 插件总开关 |
 | `plugin` | `action_enabled` | `true` | 是否注册 LLM 生图 Action |
 | `plugin` | `tools_enabled` | `true` | 是否注册图库、数据库和 Danbooru 查询工具 |
-| `generation` | `base_url` | `http://127.0.0.1:31555/v1` | OpenAI 兼容生图 API 根地址 |
+| `generation` | `base_url` | `http://127.0.0.1:31555/v1` | 生图 API 根地址；按协议拼接端点，也可直接填写完整端点 |
+| `generation` | `api_format` | `auto` | `auto` 按模型名和 URL 路径判断；也可指定 `openai` 或 NovelAI 原生格式 `novelai` |
 | `generation` | `api_key` | 空 | 生图 API Token |
 | `generation` | `model` | `nai-diffusion-4-5-full` | 生图模型名 |
 | `generation` | `prompt_model` | 空 | 自然语言提示词翻译模型；留空时复用 `models.vision_model` |
@@ -46,6 +47,8 @@
 | `watermark` | `margin` / `shadow` | `24` / `true` | 边距与描边开关 |
 
 Qdrant 查询 API 使用 `POST /collections/{collection}/points/query`，索引使用 `PUT /collections/{collection}/points`。插件不会自动创建 Collection；其向量维度必须与配置的嵌入模型输出一致。NAI Tag SQLite 数据库以只读方式打开，要求包含 `catalog_tags` 和 FTS5 虚表 `catalog_search`；该查询使用数据库自带的全文索引，不需要 Embeddings API。
+
+`api_format = "openai"` 使用 `POST /images/generations`，接受 OpenAI 风格的 `data[0].b64_json` 或 `data[0].url`。`api_format = "novelai"` 使用 `POST /ai/generate-image` 与 NovelAI 原生请求格式，通过 `Accept: application/json` 优先接收 `images[].image` Base64，也能直接读取原生 ZIP 图片响应。`auto` 对 `nai-diffusion-*` 模型且 URL 中不含 `/v1` 的配置选择原生格式；包含 `/v1` 则选择 OpenAI 兼容格式。若代理使用自定义模型名或路由，显式指定 `api_format` 可覆盖自动判断。
 
 ### 免保存模式
 

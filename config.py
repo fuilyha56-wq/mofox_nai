@@ -26,9 +26,13 @@ class MofoxNaiConfig(BaseConfig):
 
     @config_section("generation")
     class GenerationSection(SectionBase):
-        """OpenAI 兼容生图接口和默认参数。"""
+        """OpenAI 兼容或 NovelAI 原生生图接口和默认参数。"""
 
-        base_url: str = Field(default="http://127.0.0.1:31555/v1", description="OpenAI 兼容生图 API 根地址")
+        base_url: str = Field(default="http://127.0.0.1:31555/v1", description="生图 API 根地址；支持 OpenAI 兼容与 NovelAI 原生接口")
+        api_format: Literal["auto", "openai", "novelai"] = Field(
+            default="auto",
+            description="生图协议；auto 在 NAI 模型且地址不含 /v1 时使用 NovelAI 原生格式，也可明确指定 openai 或 novelai",
+        )
         api_key: str = Field(default="", description="生图 API Bearer Token")
         model: str = Field(default="nai-diffusion-4-5-full", description="生图模型名称")
         prompt_model: str = Field(default="", description="可选的专用提示词翻译模型；留空时复用 models.vision_model，直接输入 Tag 无需模型")

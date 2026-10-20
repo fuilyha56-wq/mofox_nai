@@ -4,7 +4,7 @@
 
 ## 能力
 
-- `/nai <中文描述或 Tag>` 通过 OpenAI 兼容的 `/images/generations` 接口生成图片。
+- `/nai <中文描述或 Tag>` 支持 OpenAI 兼容的 `/images/generations` 与 NovelAI 原生 `/ai/generate-image` 两种接口。
 - 自然语言提示词通过配置的翻译模型转换后再生图；直接输入 Tag 时原样使用。NAI 4.5 固定转换为英文 Tag，NAI V5 在英文自然语言描述与 Tag 之间自动选择。
 - `/nai 反推` 读取被回复的图片，或本聊天最近一张图片，调用视觉模型反推 Tag，并以引用消息发送结果。
 - 图片归档可选。默认 `persistent` 会把图片复制到本地图片目录与 SQLite；`off` 只从 MoFox 核心聊天历史临时读取，不在插件目录或插件数据库保存图片。
@@ -32,6 +32,7 @@
 ```toml
 [generation]
 base_url = "http://127.0.0.1:31555/v1"
+api_format = "auto"
 api_key = ""
 model = "nai-diffusion-4-5-full"
 prompt_model = ""
@@ -42,7 +43,9 @@ steps = 28
 scale = 5.0
 ```
 
-生图接口需兼容 `POST /images/generations`，并返回 `data[0].b64_json` 或 `data[0].url`。自然语言生图会使用 `prompt_model`；留空时复用 `[models].vision_model`，并通过兼容 Chat Completions 的 `[models].base_url` 请求。`prompt_format = "auto"` 会对 NAI 4.5 强制输出 Tag，并允许 NAI V5 翻译模型自行选择英文自然语言或 Tag；其他模型默认输出 Tag。也可以设置 `tags` 或 `natural_language` 指定翻译格式，但 NAI 4.5 始终只输出 Tag。直接输入 Tag 不需要提示词翻译模型。
+`api_format = "auto"` 会在模型名为 `nai-diffusion-*` 且地址不含 `/v1` 时使用 NovelAI 原生请求格式；地址含 `/v1` 时使用 OpenAI 兼容格式。也可明确设为 `novelai` 或 `openai`。例如原生接口地址可配置为 `http://127.0.0.1:41800`，插件会请求 `/ai/generate-image`；`api_key` 填写服务要求的 Bearer Token。NovelAI 原生模式发送 `action`、`input`、`model` 和 `parameters` 字段，并能读取 JSON Base64 或 ZIP 图片响应。使用代理自定义路径时，可将完整 `/ai/generate-image` 地址填入 `base_url`，或将 `api_format` 指定为 `novelai`。
+
+自然语言生图会使用 `prompt_model`；留空时复用 `[models].vision_model`，并通过兼容 Chat Completions 的 `[models].base_url` 请求。`prompt_format = "auto"` 会对 NAI 4.5 强制输出 Tag，并允许 NAI V5 翻译模型自行选择英文自然语言或 Tag；其他模型默认输出 Tag。也可以设置 `tags` 或 `natural_language` 指定翻译格式，但 NAI 4.5 始终只输出 Tag。直接输入 Tag 不需要提示词翻译模型。
 
 反推与自动描述使用支持多模态输入的 OpenAI 兼容 Chat Completions 模型：
 

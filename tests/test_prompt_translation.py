@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import base64
 import inspect
+from io import BytesIO
 import unittest
+from zipfile import ZIP_DEFLATED, ZipFile
 from unittest.mock import patch
 
 from plugins.mofox_nai.config import MofoxNaiConfig
@@ -29,13 +31,23 @@ def _run_immediate(coroutine):
 
 
 class _Response:
-    def __init__(self, payload: dict) -> None:
+    def __init__(
+        self,
+        payload: dict | None = None,
+        *,
+        content: bytes = b"",
+        headers: dict[str, str] | None = None,
+    ) -> None:
         self._payload = payload
+        self.content = content
+        self.headers = headers or {"content-type": "application/json"}
 
     def raise_for_status(self) -> None:
         return None
 
     def json(self) -> dict:
+        if self._payload is None:
+            raise AssertionError("This response does not contain JSON")
         return self._payload
 
 
@@ -118,7 +130,64 @@ class PromptTranslationTests(unittest.TestCase):
 
         self.assertEqual(image_data, b"test-image-bytes")
         self.assertEqual(final_prompt, "A girl with blue hair outdoors.")
+        self.assertEqual(_Client.requests[1][0], "http://127.0.0.1:31555/v1/images/generations")
         self.assertEqual(_Client.requests[1][1]["json"]["prompt"], final_prompt)
+
+    def test_native_novelai_request_uses_native_endpoint_and_json_response(self) -> None:
+        self.config.generation.base_url = "http://47.116.22.227:41800"
+        self.config.generation.model = "nai-diffusion-5-full"
+        self.config.generation.api_key = "test-token"
+        image = base64.b64encode(b"native-image-bytes").decode("ascii")
+        _Client.responses = [_Response({"images": [{"image": image, "index": 0, "seed": 123}]})]
+        service = MofoxNaiService(self.config)
+
+        with patch("plugins.mofox_nai.service.httpx.AsyncClient", _Client):
+            image_data, final_prompt = _run_immediate(service.generate_image("1girl, blue_hair"))
+
+        url, request = _Client.requests[0]
+        body = request["json"]
+        self.assertEqual(url, "http://47.116.22.227:41800/ai/generate-image")
+        self.assertEqual(request["headers"]["Accept"], "application/json")
+        self.assertEqual(request["headers"]["Authorization"], "Bearer test-token")
+        self.assertEqual(body["action"], "generate")
+        self.assertEqual(body["input"], final_prompt)
+        self.assertEqual(body["model"], "nai-diffusion-5-full")
+        self.assertEqual(body["parameters"]["prompt"], final_prompt)
+        self.assertEqual(body["parameters"]["v4_prompt"]["caption"]["base_caption"], final_prompt)
+        self.assertEqual(body["parameters"]["v4_negative_prompt"]["caption"]["base_caption"], self.config.generation.negative_prompt)
+        self.assertEqual(image_data, b"native-image-bytes")
+
+    def test_native_novelai_zip_response_is_read_in_memory(self) -> None:
+        self.config.generation.base_url = "http://images.test"
+        self.config.generation.model = "nai-diffusion-4-5-full"
+        archive_data = BytesIO()
+        with ZipFile(archive_data, "w", compression=ZIP_DEFLATED) as archive:
+            archive.writestr("image/0.png", b"native-zip-image")
+        _Client.responses = [
+            _Response(content=archive_data.getvalue(), headers={"content-type": "application/zip"})
+        ]
+        service = MofoxNaiService(self.config)
+
+        with patch("plugins.mofox_nai.service.httpx.AsyncClient", _Client):
+            image_data, _ = _run_immediate(service.generate_image("1girl"))
+
+        self.assertEqual(image_data, b"native-zip-image")
+        self.assertEqual(_Client.requests[0][0], "http://images.test/ai/generate-image")
+
+    def test_explicit_native_format_accepts_a_prefixed_endpoint_without_duplication(self) -> None:
+        self.config.generation.api_format = "novelai"
+        self.config.generation.base_url = "https://image.test/api/ai/generate-image"
+        self.config.generation.model = "my-custom-model"
+        image = base64.b64encode(b"native-image-bytes").decode("ascii")
+        _Client.responses = [_Response({"images": [{"image": image}]})]
+        service = MofoxNaiService(self.config)
+
+        with patch("plugins.mofox_nai.service.httpx.AsyncClient", _Client):
+            _run_immediate(service.generate_image("1girl"))
+
+        self.assertEqual(
+            _Client.requests[0][0], "https://image.test/api/ai/generate-image"
+        )
 
     def test_natural_language_requires_a_configured_text_model(self) -> None:
         self.config.models.vision_model = ""
