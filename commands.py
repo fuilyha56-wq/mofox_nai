@@ -451,9 +451,13 @@ class NaiCommand(BaseCommand):
                 queued=service.is_queued_mode() and service.generation_queue_locked(),
                 activity=activity,
             )
-            await self._reply_text(notice)
         except Exception as notice_error:
-            logger.warning("图片任务状态消息生成失败，将继续执行", exc_info=notice_error)
+            logger.error("图片任务状态消息生成失败，已取消请求", exc_info=notice_error)
+            raise RuntimeError(
+                "无法按当前 Core 人格生成图片状态消息，已取消本次图片请求；请检查翻译/视觉模型配置和连接。"
+            ) from notice_error
+        if not await self._reply_text(notice):
+            raise RuntimeError("图片状态消息发送失败，已取消本次图片请求。")
 
     async def _run_referenced_generation(
         self,

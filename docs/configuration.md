@@ -11,13 +11,13 @@
 | `generation` | `api_format` | `auto` | `auto` 按模型名和 URL 路径判断；也可指定 `openai` 或 NovelAI 原生格式 `novelai` |
 | `generation` | `api_key` | 空 | 生图 API Token |
 | `generation` | `model` | `nai-diffusion-4-5-full` | 生图模型名 |
-| `generation` | `prompt_model` | 空 | 自然语言提示词翻译模型；留空时复用 `models.vision_model` |
+| `generation` | `prompt_model` | 空 | 自然语言提示词翻译和人设状态通知模型；留空时复用 `models.vision_model` |
 | `generation` | `prompt_format` | `auto` | `auto` 对 NAI V5 由翻译模型选择英文自然语言或 Tag，其他模型输出 Tag；NAI 4.5 始终输出 Tag |
 | `generation` | `width` / `height` | `832` / `1216` | 生图尺寸 |
 | `generation` | `steps` / `scale` | `28` / `5.0` | 采样参数 |
 | `generation` | `negative_prompt` | 常用质量排除词 | 默认负面提示词 |
 | `models` | `base_url` / `api_key` | 本地 `/v1` / 空 | Chat Completions 与视觉模型 API |
-| `models` | `vision_model` | 空 | 必填于图片 Tag 反推和视觉描述 |
+| `models` | `vision_model` | 空 | 图片 Tag 反推、视觉描述必填；也可作为翻译与人设状态通知模型 |
 | `models` | `embedding_base_url` | 空 | 留空则用 `models.base_url` |
 | `models` | `embedding_model` | 空 | Qdrant 语义检索的 Embeddings 模型 |
 | `archive` | `enabled` | `true` | 图片消息归档开关 |
@@ -47,6 +47,8 @@
 | `watermark` | `margin` / `shadow` | `24` / `true` | 边距与描边开关 |
 
 Qdrant 查询 API 使用 `POST /collections/{collection}/points/query`，索引使用 `PUT /collections/{collection}/points`。插件不会自动创建 Collection；其向量维度必须与配置的嵌入模型输出一致。NAI Tag SQLite 数据库以只读方式打开，要求包含 `catalog_tags` 和 FTS5 虚表 `catalog_search`；该查询使用数据库自带的全文索引，不需要 Embeddings API。
+
+生图、参考、重绘、局部重绘、放大和 Director Tools 命令会先用 Core 当前人格与翻译/视觉模型生成一条状态消息。必须配置 `[models].base_url`，并配置 `[generation].prompt_model` 或 `[models].vision_model`；如果状态消息生成或发送失败，插件会取消图片请求，避免跳过这条状态提示。
 
 `api_format = "openai"` 使用 `POST /images/generations`，接受 OpenAI 风格的 `data[0].b64_json` 或 `data[0].url`。`api_format = "novelai"` 使用 `POST /ai/generate-image` 与 NovelAI 原生请求格式，通过 `Accept: application/json` 优先接收 `images[].image` Base64，也能直接读取原生 ZIP 图片响应。`auto` 对 `nai-diffusion-*` 模型且 URL 中不含 `/v1` 的配置选择原生格式；包含 `/v1` 则选择 OpenAI 兼容格式。对于 NAI 原生服务，请显式指定 `novelai`；可用 `/nai 设置 协议 novelai` 实时切换。
 

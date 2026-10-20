@@ -274,6 +274,61 @@ class NativeOperationTests(unittest.TestCase):
         self.assertIn("串行生成队列", system_prompt)
         self.assertIn("参考图生成", system_prompt)
 
+    def test_work_notice_failure_prevents_generation(self) -> None:
+        command = SimpleNamespace(
+            _config=lambda: self.config,
+            _notify_work=AsyncMock(side_effect=RuntimeError("persona notice unavailable")),
+            _reply=AsyncMock(return_value=True),
+            _message=SimpleNamespace(platform="qq"),
+            stream_id="status-stream",
+            message_id="command-message",
+        )
+        with patch(
+            "plugins.mofox_nai.commands.MofoxNaiService.generate_image",
+            new=AsyncMock(),
+        ) as generate:
+            ok, message = _run_immediate(NaiCommand._generate(command, "1girl"))
+
+        self.assertFalse(ok)
+        self.assertIn("persona notice unavailable", message)
+        generate.assert_not_awaited()
+        command._reply.assert_awaited_once()
+
+    def test_work_notice_send_failure_aborts_the_task(self) -> None:
+        service = SimpleNamespace(
+            is_queued_mode=lambda: False,
+            generation_queue_locked=lambda: False,
+            in_character_notice=AsyncMock(return_value="我正在帮你处理这张图。"),
+        )
+        command = SimpleNamespace(_reply_text=AsyncMock(return_value=False))
+
+        with self.assertRaisesRegex(RuntimeError, "状态消息发送失败"):
+            _run_immediate(NaiCommand._notify_work(command, service, "生成图片"))
+
+        service.in_character_notice.assert_awaited_once_with(queued=False, activity="生成图片")
+
+    def test_base_command_dispatch_returns_success_for_root_help_and_settings(self) -> None:
+        cases = [
+            ("/nai", "", "MoFox NAI"),
+            ("/nai 帮助", "帮助", "MoFox NAI"),
+            ("/nai 设置", "设置", "当前生图设置"),
+        ]
+        for message_text, routed_text, title in cases:
+            with self.subTest(message_text=message_text):
+                command = NaiCommand(
+                    plugin=SimpleNamespace(config=self.config),
+                    stream_id="command-stream",
+                    message=SimpleNamespace(content=message_text, platform="qq"),
+                )
+                with patch(
+                    "plugins.mofox_nai.commands.send_image",
+                    new=AsyncMock(return_value=True),
+                ) as send:
+                    ok, _ = _run_immediate(command.execute(routed_text))
+
+                self.assertTrue(ok)
+                self.assertEqual(send.await_args.kwargs["processed_plain_text"], f"[MoFox NAI · {title}]")
+
     def test_reverse_tags_sends_the_referenced_image_to_the_vision_model(self) -> None:
         self.config.models.base_url = "https://models.test/v1"
         self.config.models.vision_model = "vision-model"

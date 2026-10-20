@@ -7,6 +7,7 @@
 - `/nai <中文描述或 Tag>` 支持 OpenAI 兼容的 `/images/generations` 与 NovelAI 原生 `/ai/generate-image` 两种接口。
 - 引用图支持 Vibe Transfer、img2img 重绘、遮罩局部重绘、独立放大与 NAI 原生 Director Tools 增强。
 - 自然语言提示词通过配置的翻译模型转换后再生图；直接输入 Tag 时原样使用。NAI 4.5 固定转换为英文 Tag，NAI V5 在英文自然语言描述与 Tag 之间自动选择。
+- 生图和图片处理命令会先读取 Core 人格，让配置模型现场生成状态消息；状态消息生成或发送失败时会取消图片请求。
 - `/nai 反推` 只读取明确回复的图片消息，调用视觉模型反推 Tag，并以引用消息发送结果。
 - 图片归档可选。默认 `persistent` 会把图片复制到本地图片目录与 SQLite；`off` 只从 MoFox 核心聊天历史临时读取，不在插件目录或插件数据库保存图片。
 - `/nai 查看 <记录ID或消息ID>` 重新发送图片；`/nai 搜索 <关键词>` 搜索当前聊天的描述、Tag 和原消息文本。
