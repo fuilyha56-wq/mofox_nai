@@ -19,6 +19,7 @@ from PIL import Image
 from plugins.mofox_nai.cards import render_card
 from plugins.mofox_nai.commands import NaiCommand
 from plugins.mofox_nai.config import MofoxNaiConfig, archive_is_enabled
+from plugins.mofox_nai.archive import list_core_image_messages
 from plugins.mofox_nai.service import MofoxNaiService
 from plugins.mofox_nai.watermark import _font_candidates, apply_watermark
 
@@ -457,6 +458,41 @@ class NativeOperationTests(unittest.TestCase):
     def test_archive_off_disables_local_image_persistence(self) -> None:
         self.config.archive.enabled = True
         self.config.archive.mode = "off"
+        self.assertFalse(archive_is_enabled(self.config))
+
+    def test_archive_off_reads_core_history_image_in_memory(self) -> None:
+        self.config.archive.enabled = True
+        self.config.archive.mode = "off"
+        message = SimpleNamespace(
+            message_id="history-image",
+            stream_id="history-stream",
+            platform="qq",
+            sender_id="sender",
+            sender_name="user",
+            sender_role="user",
+            processed_plain_text="[图片]",
+            content="",
+            time=123.0,
+        )
+
+        with (
+            patch(
+                "plugins.mofox_nai.archive.get_stream_messages",
+                new=AsyncMock(return_value=[message]),
+            ) as get_messages,
+            patch(
+                "plugins.mofox_nai.archive.message_images",
+                return_value=[(b"history-image-bytes", ".png")],
+            ),
+            patch("asyncio.to_thread", new=_async_immediate),
+        ):
+            rows = _run_immediate(
+                list_core_image_messages("history-stream", limit=10)
+            )
+
+        get_messages.assert_awaited_once_with("history-stream", limit=10)
+        self.assertEqual(rows[0]["message_id"], "history-image")
+        self.assertEqual(rows[0]["_images"], [(b"history-image-bytes", ".png")])
         self.assertFalse(archive_is_enabled(self.config))
 
     def test_watermark_supports_all_four_corners(self) -> None:
