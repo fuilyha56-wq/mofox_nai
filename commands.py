@@ -380,6 +380,7 @@ class NaiCommand(BaseCommand):
             help_text = (
                 "用法：/nai <中文描述或逗号分隔的 Tag>\n"
                 "/nai 参考、重绘、放大：先回复目标图片消息\n"
+                "/nai 导演 <req_type> [defry] [提示词]：调用原生 Director Tools\n"
                 "/nai 反推：反推被回复图片的 Tag\n"
                 "/nai 历史 [数量]：查看本聊天图片记录\n"
                 "/nai 设置、画风、模型：查看和修改生图配置\n"
@@ -599,6 +600,54 @@ class NaiCommand(BaseCommand):
             await self._reply(f"图片放大失败：{error}", title="图片放大", status="ERROR", accent=RED)
             return False, str(error)
 
+    @cmd_route("导演")
+    async def handle_director_tool(self) -> tuple[bool, str]:
+        """把被引用图片交给 NAI 原生 Director Tools。"""
+
+        config = self._config()
+        if config is None:
+            return False, "mofox_nai 配置尚未加载"
+        raw = self._remainder("导演").strip()
+        if not raw:
+            message = "用法：/nai 导演 <req_type> [defry整数] [提示词]，并回复要处理的图片。req_type 使用当前 NAI 服务支持的工具类型。"
+            await self._reply(message, title="NAI Director Tools", status="NEED INPUT", accent=CYAN)
+            return False, message
+        try:
+            parts = shlex.split(raw)
+            request_type = parts[0]
+            defry = 0
+            prompt_start = 1
+            if len(parts) > 1 and re.fullmatch(r"-?\d+", parts[1]):
+                defry = int(parts[1])
+                prompt_start = 2
+            prompt = " ".join(parts[prompt_start:])
+            service = MofoxNaiService(config)
+            image_data, source_message_id, _, _ = await self._replied_image()
+            await self._notify_work(service, "NAI Director Tools 图片处理")
+            result, final_prompt = await service.augment_image(
+                image_data=image_data,
+                request_type=request_type,
+                prompt=prompt,
+                defry=defry,
+            )
+            sent = await send_image(
+                image_data=base64.b64encode(result).decode("ascii"),
+                stream_id=self.stream_id,
+                platform=getattr(self._message, "platform", None),
+                processed_plain_text=f"[NAI Director Tools: {request_type}]",
+                reply_to=source_message_id,
+            )
+            if not sent:
+                raise RuntimeError("平台没有成功发送 Director Tools 处理后的图片")
+            message = f"Director Tools「{request_type}」处理完成。"
+            if final_prompt:
+                message += f"提示词：{final_prompt[:240]}"
+            return True, message
+        except Exception as error:
+            logger.error("NAI Director Tools 处理失败", exc_info=error)
+            await self._reply(f"Director Tools 处理失败：{error}", title="图片处理失败", status="ERROR", accent=RED)
+            return False, str(error)
+
     @cmd_route("描述")
     async def handle_describe(self) -> tuple[bool, str]:
         """调用视觉模型描述当前明确引用的图片。"""
@@ -795,7 +844,9 @@ class NaiCommand(BaseCommand):
 
         message = (
             "/nai <自然语言或 Tag>：生成图片\n"
-            "/nai 反推：反推回复图片或本聊天最近图片，并引用原图片发送 Tag\n"
+            "/nai 参考、重绘、局部重绘、放大：回复目标图片后处理\n"
+            "/nai 导演 <req_type> [defry] [提示词]：调用 NAI 原生 Director Tools\n"
+            "/nai 描述：描述回复的图片；/nai 反推：反推回复图片 Tag\n"
             "/nai 历史 [数量]：查看本聊天图片（免保存模式只读核心历史）\n"
             "/nai 查看 <记录ID或消息ID>：重新发送图片\n"
             "/nai 搜索 <关键词>：搜索本聊天图片记录"

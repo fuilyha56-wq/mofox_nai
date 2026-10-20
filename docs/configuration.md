@@ -50,6 +50,8 @@ Qdrant 查询 API 使用 `POST /collections/{collection}/points/query`，索引�
 
 `api_format = "openai"` 使用 `POST /images/generations`，接受 OpenAI 风格的 `data[0].b64_json` 或 `data[0].url`。`api_format = "novelai"` 使用 `POST /ai/generate-image` 与 NovelAI 原生请求格式，通过 `Accept: application/json` 优先接收 `images[].image` Base64，也能直接读取原生 ZIP 图片响应。`auto` 对 `nai-diffusion-*` 模型且 URL 中不含 `/v1` 的配置选择原生格式；包含 `/v1` 则选择 OpenAI 兼容格式。对于 NAI 原生服务，请显式指定 `novelai`；可用 `/nai 设置 协议 novelai` 实时切换。
 
+引用图片可使用原生 `/ai/augment-image` Director Tools：`/nai 导演 <req_type> [defry] [提示词]`。请先回复目标图片；`req_type` 由所连接的 NAI 服务决定，插件不会猜测或改写不同服务版本的工具枚举。
+
 ### 免保存模式
 
 将 `[archive].mode` 设为 `"off"` 后，插件不会创建本地图像目录或 SQLite 图片库，也不会把聊天图片复制到插件存储。历史、查看、反推和历史搜索会在请求期间从 MoFox 核心聊天历史读取图片，图片字节只在内存中处理。MoFox 核心仍可能按自身设置保存聊天记录和图片；此选项只关闭本插件额外归档。旧配置的 `enabled = false` 具有相同效果。

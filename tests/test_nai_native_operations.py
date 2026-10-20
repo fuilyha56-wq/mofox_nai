@@ -203,6 +203,37 @@ class NativeOperationTests(unittest.TestCase):
         self.assertEqual(request["json"]["model"], self.config.generation.model)
         self.assertEqual(result, b"upscaled-image")
 
+    def test_director_tools_uses_native_augment_endpoint(self) -> None:
+        archive_data = BytesIO()
+        with ZipFile(archive_data, "w", compression=ZIP_DEFLATED) as archive:
+            archive.writestr("image/0.png", b"director-result")
+        _Client.responses = [
+            _Response(
+                content=archive_data.getvalue(),
+                headers={"content-type": "application/zip"},
+            )
+        ]
+
+        with patch("plugins.mofox_nai.service.httpx.AsyncClient", _Client):
+            result, final_prompt = _run_immediate(
+                MofoxNaiService(self.config).augment_image(
+                    b"quoted-source",
+                    request_type="custom.tool/type",
+                    prompt="red_hair",
+                    defry=8,
+                )
+            )
+
+        url, request = _Client.requests[0]
+        self.assertEqual(url, "https://nai.test/ai/augment-image")
+        self.assertEqual(request["headers"]["Accept"], "application/zip")
+        self.assertEqual(request["json"]["req_type"], "custom.tool/type")
+        self.assertEqual(request["json"]["defry"], 8)
+        self.assertEqual(request["json"]["prompt"], "red_hair")
+        self.assertEqual(request["json"]["image"], base64.b64encode(b"quoted-source").decode())
+        self.assertEqual(result, b"director-result")
+        self.assertEqual(final_prompt, "red_hair")
+
     def test_native_404_explains_route_configuration(self) -> None:
         _Client.responses = [_Response(status_code=404)]
         with patch("plugins.mofox_nai.service.httpx.AsyncClient", _Client):
@@ -297,6 +328,38 @@ class NativeOperationTests(unittest.TestCase):
         self.assertTrue(ok)
         self.assertEqual(self.config.generation.api_format, "novelai")
         command._reply.assert_awaited_once()
+
+    def test_director_command_replies_to_the_quoted_source(self) -> None:
+        command = SimpleNamespace(
+            _config=lambda: self.config,
+            _remainder=lambda _: "colorize 8 red_hair",
+            _message=SimpleNamespace(platform="qq"),
+            _replied_image=AsyncMock(
+                return_value=(b"quoted-source", "quoted-message", object(), ".png")
+            ),
+            _notify_work=AsyncMock(),
+            stream_id="director-stream",
+        )
+        with (
+            patch(
+                "plugins.mofox_nai.commands.MofoxNaiService.augment_image",
+                new=AsyncMock(return_value=(b"director-result", "red_hair")),
+            ) as augment,
+            patch(
+                "plugins.mofox_nai.commands.send_image",
+                new=AsyncMock(return_value=True),
+            ) as send,
+        ):
+            ok, _ = _run_immediate(NaiCommand.handle_director_tool(command))
+
+        self.assertTrue(ok)
+        augment.assert_awaited_once_with(
+            image_data=b"quoted-source",
+            request_type="colorize",
+            prompt="red_hair",
+            defry=8,
+        )
+        self.assertEqual(send.await_args.kwargs["reply_to"], "quoted-message")
 
     def test_replied_image_reads_only_the_exact_reply_target(self) -> None:
         config = self.config

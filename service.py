@@ -464,7 +464,14 @@ class MofoxNaiService:
         async def send_request() -> bytes:
             async with httpx.AsyncClient(timeout=generation.timeout) as client:
                 response = await client.post(endpoint, headers=headers, json=body)
-                response.raise_for_status()
+                try:
+                    response.raise_for_status()
+                except httpx.HTTPStatusError as error:
+                    if response.status_code == 404:
+                        raise ValueError(
+                            "NAI 原生放大端点返回 404；请检查 base_url，并确认服务提供 /ai/upscale。"
+                        ) from error
+                    raise
                 return await self._extract_native_image(response, client)
 
         if self.is_queued_mode():
@@ -473,6 +480,61 @@ class MofoxNaiService:
         else:
             result = await send_request()
         return apply_watermark(result, self.config)
+
+    async def augment_image(
+        self,
+        image_data: bytes,
+        request_type: str,
+        prompt: str = "",
+        defry: int = 0,
+    ) -> tuple[bytes, str]:
+        """使用 NAI 原生 Director Tools 端点处理被引用图片。"""
+
+        generation = self.config.generation
+        if self._generation_api_format() != "novelai":
+            raise ValueError("NAI Director Tools 需要 [generation].api_format = 'novelai'")
+        if not image_data:
+            raise ValueError("没有可处理的引用图片")
+        clean_type = request_type.strip()
+        if (
+            not clean_type
+            or len(clean_type) > 80
+            or any(ord(character) < 32 or ord(character) == 127 for character in clean_type)
+        ):
+            raise ValueError("req_type 不能为空、不能超过 80 个字符，也不能包含控制字符")
+        final_prompt = await self.prepare_prompt(prompt) if prompt.strip() else ""
+        endpoint = self._api_url(generation.base_url, "/ai/augment-image")
+        headers = {**self._headers(generation.api_key), "Accept": "application/zip"}
+        body: dict[str, Any] = {
+            "image": base64.b64encode(image_data).decode("ascii"),
+            "req_type": clean_type,
+            "width": generation.width,
+            "height": generation.height,
+        }
+        if final_prompt:
+            body["prompt"] = final_prompt
+        if defry:
+            body["defry"] = defry
+
+        async def send_request() -> bytes:
+            async with httpx.AsyncClient(timeout=generation.timeout) as client:
+                response = await client.post(endpoint, headers=headers, json=body)
+                try:
+                    response.raise_for_status()
+                except httpx.HTTPStatusError as error:
+                    if response.status_code == 404:
+                        raise ValueError(
+                            "NAI Director Tools 端点返回 404；请检查 base_url，并确认服务提供 /ai/augment-image。"
+                        ) from error
+                    raise
+                return await self._extract_native_image(response, client)
+
+        if self.is_queued_mode():
+            async with _GENERATION_QUEUE_LOCK:
+                result = await send_request()
+        else:
+            result = await send_request()
+        return apply_watermark(result, self.config), final_prompt
 
     async def _extract_native_image(self, response: httpx.Response, client: httpx.AsyncClient) -> bytes:
         """读取 NovelAI 原生接口的 JSON、ZIP 或直接图片响应。"""
