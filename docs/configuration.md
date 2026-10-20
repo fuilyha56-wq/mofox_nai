@@ -48,7 +48,7 @@
 
 Qdrant 查询 API 使用 `POST /collections/{collection}/points/query`，索引使用 `PUT /collections/{collection}/points`。插件不会自动创建 Collection；其向量维度必须与配置的嵌入模型输出一致。NAI Tag SQLite 数据库以只读方式打开，要求包含 `catalog_tags` 和 FTS5 虚表 `catalog_search`；该查询使用数据库自带的全文索引，不需要 Embeddings API。
 
-`api_format = "openai"` 使用 `POST /images/generations`，接受 OpenAI 风格的 `data[0].b64_json` 或 `data[0].url`。`api_format = "novelai"` 使用 `POST /ai/generate-image` 与 NovelAI 原生请求格式，通过 `Accept: application/json` 优先接收 `images[].image` Base64，也能直接读取原生 ZIP 图片响应。`auto` 对 `nai-diffusion-*` 模型且 URL 中不含 `/v1` 的配置选择原生格式；包含 `/v1` 则选择 OpenAI 兼容格式。若代理使用自定义模型名或路由，显式指定 `api_format` 可覆盖自动判断。
+`api_format = "openai"` 使用 `POST /images/generations`，接受 OpenAI 风格的 `data[0].b64_json` 或 `data[0].url`。`api_format = "novelai"` 使用 `POST /ai/generate-image` 与 NovelAI 原生请求格式，通过 `Accept: application/json` 优先接收 `images[].image` Base64，也能直接读取原生 ZIP 图片响应。`auto` 对 `nai-diffusion-*` 模型且 URL 中不含 `/v1` 的配置选择原生格式；包含 `/v1` 则选择 OpenAI 兼容格式。对于 NAI 原生服务，请显式指定 `novelai`；可用 `/nai 设置 协议 novelai` 实时切换。
 
 ### 免保存模式
 

@@ -29,6 +29,9 @@ from .tag_database import search_sqlite_catalog
 from .watermark import apply_watermark
 
 
+_GENERATION_QUEUE_LOCK = asyncio.Lock()
+
+
 class MofoxNaiService:
     """提供与插件配置绑定的轻量异步服务。"""
 
@@ -42,6 +45,81 @@ class MofoxNaiService:
         """构造可选 Bearer Token 请求头。"""
 
         return {"Authorization": f"Bearer {api_key}"} if api_key.strip() else {}
+
+    def is_queued_mode(self) -> bool:
+        """返回配置是否启用全局串行生成队列。"""
+
+        return self.config.generation.request_mode == "queue"
+
+    @staticmethod
+    def generation_queue_locked() -> bool:
+        """返回是否有图片任务正在占用串行队列。"""
+
+        return _GENERATION_QUEUE_LOCK.locked()
+
+    async def in_character_notice(self, queued: bool = False, activity: str = "生成图片") -> str:
+        """读取 Core 人格配置，并用提示词模型现写一条生图状态消息。"""
+
+        from src.core.config import get_core_config
+
+        model = self.config.generation.prompt_model.strip() or self.config.models.vision_model.strip()
+        base_url = self.config.models.base_url.strip()
+        if not model or not base_url:
+            raise ValueError("生图状态提示需要配置 [models].base_url 和翻译/视觉模型")
+        personality = get_core_config().personality
+        identity = "\n".join(
+            value
+            for value in [
+                f"称呼：{personality.nickname}",
+                f"身份：{personality.identity}",
+                f"核心人格：{personality.personality_core}",
+                f"人格补充：{personality.personality_side}",
+            ]
+            if value.split("：", 1)[1].strip()
+        )
+        queue_state = "请求已经进入串行生成队列，可能需要等待。" if queued else "现在开始处理生成请求。"
+        async with httpx.AsyncClient(timeout=self.config.models.timeout) as client:
+            response = await client.post(
+                self._api_url(base_url, "/chat/completions"),
+                headers=self._headers(self.config.models.api_key),
+                json={
+                    "model": model,
+                    "temperature": 0.8,
+                    "max_tokens": 100,
+                    "messages": [
+                        {
+                            "role": "system",
+                            "content": (
+                                "你现在代表下面配置的人格，在群聊里自然地发一条很短的中文状态消息。"
+                                "让用户知道刚收到了一条图片生成请求，并正在处理；若队列状态说明正在排队。"
+                                "遵循人格语气，像自然聊天，不要解释、不复述提示词、不添加引号、标签或换行。"
+                                "请现场组织措辞，不要套用固定模板。\n\n"
+                                f"人格配置：\n{identity}\n\n当前状态：{queue_state}"
+                                f"\n当前任务：{activity}"
+                            ),
+                        },
+                        {"role": "user", "content": "请写这条状态消息。"},
+                    ],
+                },
+            )
+            response.raise_for_status()
+            result = response.json()
+        value = self._message_text(result).strip().strip("\"'“”‘’` ")
+        value = " ".join(value.split())
+        if not value:
+            raise ValueError("状态提示模型没有生成消息")
+        return value[:120]
+
+    def _active_style_prompt(self) -> str:
+        """读取已选画风预设的补充提示词。"""
+
+        active_name = self.config.generation.active_style.strip().casefold()
+        if not active_name:
+            return ""
+        for preset in self.config.presets.style_presets:
+            if str(preset.get("name", "")).strip().casefold() == active_name:
+                return str(preset.get("prompt", "")).strip()
+        return ""
 
     @staticmethod
     def _api_url(base_url: str, suffix: str) -> str:
@@ -80,6 +158,16 @@ class MofoxNaiService:
         height: int,
         steps: int,
         scale: float,
+        sampler: str = "k_euler_ancestral",
+        noise_schedule: str = "karras",
+        operation: str = "generate",
+        source_image: bytes | None = None,
+        mask_image: bytes | None = None,
+        reference_strength: float = 0.6,
+        reference_information: float = 0.6,
+        redraw_strength: float = 0.65,
+        redraw_noise: float = 0.2,
+        seed: int = -1,
     ) -> dict[str, Any]:
         """构造 NovelAI 图像 API 使用的原生请求结构。"""
 
@@ -89,8 +177,8 @@ class MofoxNaiService:
             "height": height,
             "steps": steps,
             "scale": scale,
-            "sampler": "k_euler_ancestral",
-            "noise_schedule": "karras",
+            "sampler": sampler,
+            "noise_schedule": noise_schedule,
             "n_samples": 1,
             "ucPreset": 0,
             "qualityToggle": True,
@@ -102,6 +190,39 @@ class MofoxNaiService:
             "negative_prompt": negative_prompt,
             "prompt": prompt,
         }
+        if seed >= 0:
+            parameters["seed"] = seed
+        if source_image is not None:
+            encoded_image = base64.b64encode(source_image).decode("ascii")
+            if operation == "reference":
+                parameters.update(
+                    {
+                        "reference_image": encoded_image,
+                        "reference_strength": reference_strength,
+                        "reference_information_extracted": reference_information,
+                    }
+                )
+            elif operation in {"redraw", "inpaint"}:
+                parameters.update(
+                    {
+                        "image": encoded_image,
+                        "strength": redraw_strength,
+                        "noise": redraw_noise,
+                        "img2img": {
+                            "strength": redraw_strength,
+                            "noise": redraw_noise,
+                            "color_correct": True,
+                        },
+                    }
+                )
+                if operation == "inpaint":
+                    if mask_image is None:
+                        raise ValueError("局部重绘需要在命令消息中附加遮罩图片")
+                    parameters["mask"] = base64.b64encode(mask_image).decode("ascii")
+            else:
+                raise ValueError(f"不支持的原生图片操作：{operation}")
+        elif operation != "generate":
+            raise ValueError(f"{operation} 操作需要引用图片")
         if re.search(r"nai[-_ ]?diffusion[-_ ]?(?:4(?:[-_. ]?5)?|5)", model, re.IGNORECASE):
             parameters["v4_prompt"] = {
                 "caption": {"base_caption": prompt, "char_captions": []},
@@ -153,6 +274,12 @@ class MofoxNaiService:
         )
         return "v5_choice" if is_nai_v5 else "tags"
 
+    def _with_active_style(self, prompt: str) -> str:
+        """将当前画风预设追加到最终提示词。"""
+
+        style_prompt = self._active_style_prompt()
+        return f"{prompt}, {style_prompt}" if style_prompt else prompt
+
     async def prepare_prompt(self, prompt: str) -> str:
         """保留直接输入的 Tag，将自然语言翻译为当前 NAI 模型适用的提示词。"""
 
@@ -162,9 +289,9 @@ class MofoxNaiService:
             or self.config.models.vision_model.strip()
         )
         if clean_prompt.lower().startswith("tag:"):
-            return clean_prompt[4:].strip()
+            return self._with_active_style(clean_prompt[4:].strip())
         if self._looks_like_tags(clean_prompt):
-            return clean_prompt
+            return self._with_active_style(clean_prompt)
         if not model:
             raise ValueError(
                 "自然语言生图需要配置 [generation].prompt_model 或 [models].vision_model，以及 [models].base_url；"
@@ -222,13 +349,20 @@ class MofoxNaiService:
         translated = re.sub(r"^(?:tags?|prompt)\s*:\s*", "", translated, flags=re.IGNORECASE)
         if not translated:
             raise ValueError("提示词翻译模型没有返回可用提示词")
-        return translated
+        return self._with_active_style(translated)
 
     async def generate_image(
         self,
         prompt: str,
         negative_prompt: str = "",
         watermark_text: str | None = None,
+        operation: str = "generate",
+        source_image: bytes | None = None,
+        mask_image: bytes | None = None,
+        reference_strength: float | None = None,
+        reference_information: float | None = None,
+        redraw_strength: float | None = None,
+        redraw_noise: float | None = None,
     ) -> tuple[bytes, str]:
         """调用选定的生图协议并应用可选水印。"""
 
@@ -238,6 +372,8 @@ class MofoxNaiService:
         prepared_prompt = await self.prepare_prompt(prompt)
         final_negative_prompt = negative_prompt.strip() or generation.negative_prompt
         api_format = self._generation_api_format()
+        if operation != "generate" and api_format != "novelai":
+            raise ValueError("参考图、重绘和局部重绘需要 [generation].api_format = 'novelai'")
         if api_format == "novelai":
             endpoint = self._api_url(generation.base_url, "/ai/generate-image")
             headers = {
@@ -252,6 +388,16 @@ class MofoxNaiService:
                 generation.height,
                 generation.steps,
                 generation.scale,
+                generation.sampler,
+                generation.noise_schedule,
+                operation,
+                source_image,
+                mask_image,
+                generation.reference_strength if reference_strength is None else reference_strength,
+                generation.reference_information if reference_information is None else reference_information,
+                generation.redraw_strength if redraw_strength is None else redraw_strength,
+                generation.redraw_noise if redraw_noise is None else redraw_noise,
+                generation.seed,
             )
         else:
             endpoint = self._api_url(generation.base_url, "/images/generations")
@@ -265,17 +411,68 @@ class MofoxNaiService:
                 "size": f"{generation.width}x{generation.height}",
                 "steps": generation.steps,
                 "scale": generation.scale,
+                "sampler": generation.sampler,
+                "noise_schedule": generation.noise_schedule,
                 "response_format": "b64_json",
             }
-        async with httpx.AsyncClient(timeout=generation.timeout) as client:
-            response = await client.post(endpoint, headers=headers, json=body)
-            response.raise_for_status()
-            if api_format == "novelai":
-                image_data = await self._extract_native_image(response, client)
-            else:
-                image_data = await self._extract_generated_image(response.json(), client)
+            if generation.seed >= 0:
+                body["seed"] = generation.seed
+        async def send_request() -> bytes:
+            async with httpx.AsyncClient(timeout=generation.timeout) as client:
+                response = await client.post(endpoint, headers=headers, json=body)
+                try:
+                    response.raise_for_status()
+                except httpx.HTTPStatusError as error:
+                    if response.status_code == 404 and api_format == "novelai":
+                        raise ValueError(
+                            "NAI 原生生图端点返回 404。插件已发送 NovelAI 原生格式，请检查 base_url 是否为 API 根地址，"
+                            "并确认服务提供 /ai/generate-image；若刚更新插件，请重启 MoFox 后重试。"
+                        ) from error
+                    if response.status_code == 404 and api_format == "openai":
+                        raise ValueError(
+                            "OpenAI 兼容生图端点返回 404。若服务使用 NAI 原生接口，请执行 /nai 设置 协议 novelai，"
+                            "或在配置中设置 api_format = \"novelai\" 后重启 MoFox。"
+                        ) from error
+                    raise
+                if api_format == "novelai":
+                    return await self._extract_native_image(response, client)
+                return await self._extract_generated_image(response.json(), client)
+
+        if self.is_queued_mode():
+            async with _GENERATION_QUEUE_LOCK:
+                image_data = await send_request()
+        else:
+            image_data = await send_request()
         processed = apply_watermark(image_data, self.config, watermark_text)
         return processed, prepared_prompt
+
+    async def upscale_image(self, image_data: bytes) -> bytes:
+        """使用 NAI 原生独立放大端点处理被引用图片。"""
+
+        generation = self.config.generation
+        if self._generation_api_format() != "novelai":
+            raise ValueError("NAI 放大需要 [generation].api_format = 'novelai'")
+        if not image_data:
+            raise ValueError("没有可放大的引用图片")
+        endpoint = self._api_url(generation.base_url, "/ai/upscale")
+        headers = {**self._headers(generation.api_key), "Accept": "application/json"}
+        body = {
+            "image": base64.b64encode(image_data).decode("ascii"),
+            "model": generation.model,
+        }
+
+        async def send_request() -> bytes:
+            async with httpx.AsyncClient(timeout=generation.timeout) as client:
+                response = await client.post(endpoint, headers=headers, json=body)
+                response.raise_for_status()
+                return await self._extract_native_image(response, client)
+
+        if self.is_queued_mode():
+            async with _GENERATION_QUEUE_LOCK:
+                result = await send_request()
+        else:
+            result = await send_request()
+        return apply_watermark(result, self.config)
 
     async def _extract_native_image(self, response: httpx.Response, client: httpx.AsyncClient) -> bytes:
         """读取 NovelAI 原生接口的 JSON、ZIP 或直接图片响应。"""

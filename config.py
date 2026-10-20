@@ -23,6 +23,10 @@ class MofoxNaiConfig(BaseConfig):
         enabled: bool = Field(default=True, description="是否启用插件")
         action_enabled: bool = Field(default=True, description="是否向 LLM 提供生图 Action")
         tools_enabled: bool = Field(default=True, description="是否向 LLM 提供图库、向量库及 Danbooru 查询工具")
+        settings_admin_ids: list[str] = Field(
+            default_factory=list,
+            description="允许通过聊天命令修改生图设置和预设的用户 ID",
+        )
 
     @config_section("generation")
     class GenerationSection(SectionBase):
@@ -31,7 +35,7 @@ class MofoxNaiConfig(BaseConfig):
         base_url: str = Field(default="http://127.0.0.1:31555/v1", description="生图 API 根地址；支持 OpenAI 兼容与 NovelAI 原生接口")
         api_format: Literal["auto", "openai", "novelai"] = Field(
             default="auto",
-            description="生图协议；auto 在 NAI 模型且地址不含 /v1 时使用 NovelAI 原生格式，也可明确指定 openai 或 novelai",
+            description="生图协议；NAI 原生端点建议明确指定 novelai；auto 按模型和 URL 判断，也可指定 openai",
         )
         api_key: str = Field(default="", description="生图 API Bearer Token")
         model: str = Field(default="nai-diffusion-4-5-full", description="生图模型名称")
@@ -40,10 +44,22 @@ class MofoxNaiConfig(BaseConfig):
             default="auto",
             description="翻译结果格式；auto 对 NAI V5 允许模型选择英文自然语言或 Tag，其他模型输出 Tag，NAI 4.5 始终输出 Tag",
         )
-        width: int = Field(default=832, description="默认图片宽度，建议为 64 的倍数")
-        height: int = Field(default=1216, description="默认图片高度，建议为 64 的倍数")
-        steps: int = Field(default=28, description="采样步数")
-        scale: float = Field(default=5.0, description="CFG 引导强度")
+        request_mode: Literal["parallel", "queue"] = Field(
+            default="parallel",
+            description="图片请求调度；parallel 并行发送，queue 按顺序串行生成",
+        )
+        active_style: str = Field(default="", description="当前启用的画风预设名称，留空表示不附加画风")
+        width: int = Field(default=832, ge=64, le=2048, description="默认图片宽度，建议为 64 的倍数")
+        height: int = Field(default=1216, ge=64, le=2048, description="默认图片高度，建议为 64 的倍数")
+        steps: int = Field(default=28, ge=1, le=50, description="采样步数")
+        scale: float = Field(default=5.0, ge=0, le=30, description="CFG 引导强度")
+        seed: int = Field(default=-1, ge=-1, le=2147483647, description="固定随机种子；-1 表示每次随机")
+        sampler: str = Field(default="k_euler_ancestral", description="NAI 原生采样器")
+        noise_schedule: str = Field(default="karras", description="NAI 原生噪声调度")
+        reference_strength: float = Field(default=0.6, ge=0, le=1, description="参考图风格强度，范围 0–1")
+        reference_information: float = Field(default=0.6, ge=0, le=1, description="参考图信息提取量，范围 0–1")
+        redraw_strength: float = Field(default=0.65, ge=0, le=1, description="重绘保留原图程度，范围 0–1")
+        redraw_noise: float = Field(default=0.2, ge=0, le=1, description="重绘噪声比例，范围 0–1")
         negative_prompt: str = Field(default="lowres, worst quality, bad quality, jpeg artifacts, bad hands, extra digits, watermark, signature", description="默认负面提示词")
         timeout: float = Field(default=180.0, description="生图请求超时秒数")
 
@@ -115,6 +131,28 @@ class MofoxNaiConfig(BaseConfig):
         margin: int = Field(default=24, description="水印与图片边缘的间距（像素）")
         shadow: bool = Field(default=True, description="是否绘制深色文字描边以提高可读性")
 
+    @config_section("presets")
+    class PresetsSection(SectionBase):
+        """可在聊天命令中切换的画风与模型预设。"""
+
+        style_presets: list[dict[str, str]] = Field(
+            default_factory=lambda: [
+                {"name": "柔光", "prompt": "soft lighting, gentle expression, pastel colors, clean anime illustration"},
+                {"name": "电影感", "prompt": "cinematic lighting, atmospheric composition, dramatic depth, film still"},
+                {"name": "赛璐璐", "prompt": "cel shading, crisp outlines, flat colors, anime illustration"},
+            ],
+            description="画风预设；每项包含 name 和 prompt，可用 /nai 画风 添加 管理",
+            input_type="json",
+        )
+        model_presets: list[dict[str, str]] = Field(
+            default_factory=lambda: [
+                {"name": "V5 Full", "model": "nai-diffusion-5-full"},
+                {"name": "V4.5 Full", "model": "nai-diffusion-4-5-full"},
+            ],
+            description="模型预设；每项包含 name 和 model，可用 /nai 模型 添加 管理",
+            input_type="json",
+        )
+
     plugin: PluginSection = Field(default_factory=PluginSection)
     generation: GenerationSection = Field(default_factory=GenerationSection)
     models: ModelsSection = Field(default_factory=ModelsSection)
@@ -122,6 +160,7 @@ class MofoxNaiConfig(BaseConfig):
     database: DatabaseSection = Field(default_factory=DatabaseSection)
     danbooru: DanbooruSection = Field(default_factory=DanbooruSection)
     watermark: WatermarkSection = Field(default_factory=WatermarkSection)
+    presets: PresetsSection = Field(default_factory=PresetsSection)
 
 
 def archive_is_enabled(config: MofoxNaiConfig) -> bool:
