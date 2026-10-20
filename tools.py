@@ -10,8 +10,8 @@ from typing import Annotated
 from src.app.plugin_system.base import BaseTool
 from src.kernel.logger import get_logger
 
-from .archive import search_local_images
-from .config import MofoxNaiConfig
+from .archive import list_core_image_messages, search_local_images
+from .config import MofoxNaiConfig, archive_is_enabled
 from .service import MofoxNaiService
 
 logger = get_logger("mofox_nai.tools")
@@ -25,10 +25,10 @@ def _config(plugin: object) -> MofoxNaiConfig | None:
 
 
 class SearchImageHistoryTool(BaseTool):
-    """按描述或 Tag 搜索当前聊天中归档的图片。"""
+    """按描述或 Tag 搜索当前聊天中的图片记录或核心历史。"""
 
     name = "search_image_history"
-    description = "在当前聊天流里搜索已归档图片的描述、Tag 和原消息文本；只访问当前聊天的图片记录。"
+    description = "在当前聊天流里搜索图片描述、Tag 和原消息文本；免保存模式只读 MoFox 核心历史，不复制图片。"
 
     async def execute(
         self,
@@ -41,7 +41,19 @@ class SearchImageHistoryTool(BaseTool):
         if config is None:
             return False, "mofox_nai 配置尚未加载"
         try:
-            rows = search_local_images(config, self.get_current_stream_id(), query, limit)
+            if archive_is_enabled(config):
+                rows = search_local_images(config, self.get_current_stream_id(), query, limit)
+            else:
+                rows = await list_core_image_messages(
+                    self.get_current_stream_id(),
+                    limit=config.archive.history_scan_limit,
+                    max_bytes=config.archive.max_image_bytes,
+                )
+                terms = [part.casefold() for part in query.split() if part]
+                rows = [
+                    row for row in rows
+                    if any(term in row["source_text"].casefold() for term in terms)
+                ][: max(1, min(limit, 10))]
         except Exception as error:
             logger.exception("本地图片历史搜索失败")
             return False, f"图库搜索失败：{error}"
@@ -54,7 +66,7 @@ class SearchImageDatabaseTool(BaseTool):
     name = "search_image_database"
     description = (
         "查询插件配置的图片数据库。配置 Qdrant 与嵌入模型后会做向量语义检索；"
-        "未配置 Qdrant 时会在当前聊天的本地 SQLite 图片库中按描述、Tag 和原文搜索。"
+        "未配置 Qdrant 时会搜索本地 SQLite 图片库；免保存模式则搜索当前聊天的 MoFox 核心历史文本。"
     )
 
     async def execute(

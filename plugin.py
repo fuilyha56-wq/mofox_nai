@@ -11,7 +11,7 @@ from src.app.plugin_system.base import BasePlugin, register_plugin
 from .actions import GenerateNaiImageAction
 from .archive import initialize_archive
 from .commands import NaiCommand
-from .config import MofoxNaiConfig
+from .config import MofoxNaiConfig, archive_is_enabled
 from .handlers import ArchiveChatImagesHandler
 from .tools import SearchDanbooruTool, SearchImageDatabaseTool, SearchImageHistoryTool
 
@@ -34,7 +34,7 @@ class MofoxNaiPlugin(BasePlugin):
             return []
 
         components: list[type] = [NaiCommand]
-        if config.archive.enabled:
+        if archive_is_enabled(config):
             components.append(ArchiveChatImagesHandler)
         if config.plugin.action_enabled:
             components.append(GenerateNaiImageAction)
@@ -48,7 +48,7 @@ class MofoxNaiPlugin(BasePlugin):
         """创建图片库目录和表结构。"""
 
         config = self.config if isinstance(self.config, MofoxNaiConfig) else MofoxNaiConfig()
-        if not config.plugin.enabled:
+        if not config.plugin.enabled or not archive_is_enabled(config):
             return
         try:
             await initialize_archive(config)

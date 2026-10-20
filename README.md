@@ -6,9 +6,9 @@
 
 - `/nai <中文描述或 Tag>` 通过 OpenAI 兼容的 `/images/generations` 接口生成图片。
 - 可配置提示词整理模型，将自然语言转成 NovelAI/Danbooru 风格的英文 Tag；识别到常见 Tag 写法时直接使用原文。
-- `/nai 反推` 读取被回复的图片，或本聊天最近一张已保存图片，调用视觉模型反推 Tag，并以引用消息发送结果。
-- 入站和出站图片会保存到本地图片目录与 SQLite。使用 `/nai 历史` 时，还会从 MoFox 消息数据库回查最近历史图片并补录。
-- `/nai 查看 <记录ID>` 重新发送归档图片；`/nai 搜索 <关键词>` 搜索当前聊天的描述、Tag 和原消息文本。
+- `/nai 反推` 读取被回复的图片，或本聊天最近一张图片，调用视觉模型反推 Tag，并以引用消息发送结果。
+- 图片归档可选。默认 `persistent` 会把图片复制到本地图片目录与 SQLite；`off` 只从 MoFox 核心聊天历史临时读取，不在插件目录或插件数据库保存图片。
+- `/nai 查看 <记录ID或消息ID>` 重新发送图片；`/nai 搜索 <关键词>` 搜索当前聊天的描述、Tag 和原消息文本。
 - 可选的四角文字水印支持左上、右上、左下、右下位置，字体优先使用 **Noto Sans SC, sans-serif**。
 - LLM 可调用图库搜索、Qdrant 向量数据库搜索和 Danbooru 查询工具。Qdrant 语义搜索需要配置 OpenAI 兼容 Embeddings API。
 - Danbooru 默认强制 `rating:s`，可选配置用户名和 API Key。
@@ -20,9 +20,9 @@
 | `/nai <提示词>` | 自然语言或 Tag 生图 |
 | `/nai 生图 <提示词>` | 显式生图 |
 | `/nai 反推` | 反推引用图片或本聊天最近图片的 Tag |
-| `/nai 历史 [数量]` | 列出本聊天的图片历史；该操作会回查最多配置条数的 MoFox 历史消息 |
-| `/nai 查看 <记录ID>` | 重新发送本聊天中指定图片 |
-| `/nai 搜索 <关键词>` | 在本地归档描述、Tag、消息文本中搜索 |
+| `/nai 历史 [数量]` | 列出本聊天图片；`off` 模式只读核心历史 |
+| `/nai 查看 <记录ID或消息ID>` | 重新发送本聊天中指定图片 |
+| `/nai 搜索 <关键词>` | 搜索图片描述、Tag 或消息文本 |
 | `/nai 帮助` | 查看命令说明 |
 
 ## 安装与配置
@@ -55,7 +55,16 @@ embedding_api_key = ""
 embedding_model = "your-embedding-model"
 ```
 
-图片本体保存在 `data/mofox_nai/images/`，索引保存在 `data/mofox_nai/images.sqlite3`。要用 Qdrant 的向量语义检索，创建好维度与嵌入模型一致的 Collection 后配置：
+默认情况下，图片本体保存在 `data/mofox_nai/images/`，索引保存在 `data/mofox_nai/images.sqlite3`。如不希望插件另存图片，在生成的配置文件中设置：
+
+```toml
+[archive]
+mode = "off"
+```
+
+`off` 模式不会创建插件图片目录或 SQLite 图片库，不会自动归档或索引图片。`/nai 历史`、`/nai 查看`、`/nai 反推` 和本地历史搜索会在请求期间从 MoFox 核心历史读取图片，图片字节只临时保存在内存中。此设置仅关闭本插件额外保存；MoFox 核心聊天历史仍按核心自身的配置和保留策略管理。旧配置可将 `enabled = false` 达到相同效果。`history_scan_limit` 控制回查数量。
+
+要用 Qdrant 的向量语义检索，创建好维度与嵌入模型一致的 Collection 后配置：
 
 ```toml
 [database]
@@ -108,5 +117,5 @@ safe_only = true
 
 ## 隐私和保留
 
-图片数据保存在本机配置的目录和 SQLite 文件中。默认最多保存 5000 条图片消息记录，单张图片最大 20 MiB。历史回查遵循 MoFox 当前流和消息清理边界，不会跨聊天搜索；Qdrant 检索默认按 `stream_id` 限定范围。需要空间管理时，修改 `[archive].max_records` 或删除本地图库目录及数据库文件。
+开启 `persistent` 时，图片数据保存在本机配置的目录和 SQLite 文件中，默认最多保存 5000 条图片消息记录，单张图片最大 20 MiB。`off` 模式不创建或写入插件本地图片归档，但 MoFox 核心历史仍由核心自身管理。历史回查遵循当前聊天流，不会跨聊天搜索；Qdrant 检索默认按 `stream_id` 限定范围。
 

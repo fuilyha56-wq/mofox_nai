@@ -55,7 +55,14 @@ class MofoxNaiConfig(BaseConfig):
     class ArchiveSection(SectionBase):
         """聊天图片归档设置。"""
 
-        enabled: bool = Field(default=True, description="是否归档入站与出站聊天图片")
+        mode: Literal["persistent", "off"] = Field(
+            default="persistent",
+            description="persistent 将图片保存到插件图库；off 不复制图片到插件目录/SQLite，并从 MoFox 核心历史临时读取",
+        )
+        enabled: bool = Field(
+            default=True,
+            description="兼容旧配置的本地归档开关；设为 false 与 mode=off 相同",
+        )
         database_path: str = Field(default="data/mofox_nai/images.sqlite3", description="本地 SQLite 图片元数据数据库路径")
         image_dir: str = Field(default="data/mofox_nai/images", description="聊天图片及生成图片的本地文件目录")
         max_image_bytes: int = Field(default=20971520, description="单张图片最大归档大小，默认 20 MiB")
@@ -106,3 +113,9 @@ class MofoxNaiConfig(BaseConfig):
     database: DatabaseSection = Field(default_factory=DatabaseSection)
     danbooru: DanbooruSection = Field(default_factory=DanbooruSection)
     watermark: WatermarkSection = Field(default_factory=WatermarkSection)
+
+
+def archive_is_enabled(config: MofoxNaiConfig) -> bool:
+    """判断插件本地图片持久化是否开启。"""
+
+    return config.archive.enabled and config.archive.mode == "persistent"

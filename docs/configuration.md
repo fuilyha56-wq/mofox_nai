@@ -19,11 +19,12 @@
 | `models` | `embedding_base_url` | 空 | 留空则用 `models.base_url` |
 | `models` | `embedding_model` | 空 | Qdrant 语义检索的 Embeddings 模型 |
 | `archive` | `enabled` | `true` | 图片消息归档开关 |
+| `archive` | `mode` | `persistent` | `persistent` 将图片另存到插件目录和 SQLite；`off` 不做插件级持久化，命令临时从 MoFox 核心历史读取；设 `enabled=false` 也会关闭 |
 | `archive` | `database_path` | `data/mofox_nai/images.sqlite3` | 插件 SQLite 元数据文件 |
 | `archive` | `image_dir` | `data/mofox_nai/images` | 图片文件目录 |
 | `archive` | `max_image_bytes` | 20 MiB | 单图最大文件大小 |
 | `archive` | `max_records` | `5000` | 归档记录上限 |
-| `archive` | `history_scan_limit` | `200` | `/nai 历史` 与反推回查的最多核心历史消息数 |
+| `archive` | `history_scan_limit` | `200` | `/nai 历史`、查看、搜索与反推最多读取的核心历史消息数 |
 | `archive` | `auto_caption` | `false` | 后台调用视觉模型描述新图 |
 | `archive` | `auto_index` | `false` | 将有文本的图片记录嵌入并写入 Qdrant |
 | `database` | `qdrant_url` | 空 | Qdrant 地址；空时工具查询本地 SQLite 文本 |
@@ -43,6 +44,10 @@
 | `watermark` | `margin` / `shadow` | `24` / `true` | 边距与描边开关 |
 
 Qdrant 查询 API 使用 `POST /collections/{collection}/points/query`，索引使用 `PUT /collections/{collection}/points`。插件不会自动创建 Collection；其向量维度必须与配置的嵌入模型输出一致。
+
+### 免保存模式
+
+将 `[archive].mode` 设为 `"off"` 后，插件不会创建本地图像目录或 SQLite 图片库，也不会把聊天图片复制到插件存储。历史、查看、反推和历史搜索会在请求期间从 MoFox 核心聊天历史读取图片，图片字节只在内存中处理。MoFox 核心仍可能按自身设置保存聊天记录和图片；此选项只关闭本插件额外归档。旧配置的 `enabled = false` 具有相同效果。
 
 ## 许可证声明
 

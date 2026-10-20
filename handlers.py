@@ -15,7 +15,7 @@ from src.kernel.event import EventDecision
 from src.kernel.logger import get_logger
 
 from .archive import archive_image, message_images, update_image_description
-from .config import MofoxNaiConfig
+from .config import MofoxNaiConfig, archive_is_enabled
 from .service import MofoxNaiService
 
 logger = get_logger("mofox_nai.archive")
@@ -34,7 +34,7 @@ class ArchiveChatImagesHandler(BaseEventHandler):
         """快速提取图片并写入本地归档，耗时索引交给任务管理器。"""
 
         config = self.plugin.config
-        if not isinstance(config, MofoxNaiConfig) or not config.archive.enabled:
+        if not isinstance(config, MofoxNaiConfig) or not archive_is_enabled(config):
             return EventDecision.PASS, params
         message = params.get("message")
         if message is None:

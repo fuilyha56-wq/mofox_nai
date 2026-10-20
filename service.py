@@ -18,11 +18,12 @@ import httpx
 
 from .archive import (
     get_image_record,
+    list_core_image_messages,
     read_image_file,
     search_local_images,
     update_image_description,
 )
-from .config import MofoxNaiConfig
+from .config import MofoxNaiConfig, archive_is_enabled
 from .watermark import apply_watermark
 
 
@@ -233,14 +234,7 @@ class MofoxNaiService:
         """为归档图片生成简洁的可编辑 Tag 列表与描述。"""
 
         image_data = await asyncio.to_thread(read_image_file, record)
-        response = await self._vision_request(
-            image_data,
-            "You are an image tagging assistant. Describe only visible content. "
-            "Return two lines exactly: 'Tags: ' followed by concise comma-separated English "
-            "Danbooru-style tags; then 'Caption: ' followed by one short Chinese sentence. "
-            "Do not guess real identities, hidden details, or an exact artist.",
-        )
-        tags, caption = self._parse_reverse_result(response)
+        tags, caption = await self.reverse_image_bytes(image_data)
         update_image_description(self.config, int(record["id"]), caption, tags)
         if self.config.database.qdrant_url.strip():
             refreshed = get_image_record(
@@ -249,6 +243,18 @@ class MofoxNaiService:
             if refreshed:
                 await self.index_record(refreshed)
         return tags, caption
+
+    async def reverse_image_bytes(self, image_data: bytes) -> tuple[str, str]:
+        """只在内存中分析图片并返回 Tag，不更新本地或远端图库。"""
+
+        response = await self._vision_request(
+            image_data,
+            "You are an image tagging assistant. Describe only visible content. "
+            "Return two lines exactly: 'Tags: ' followed by concise comma-separated English "
+            "Danbooru-style tags; then 'Caption: ' followed by one short Chinese sentence. "
+            "Do not guess real identities, hidden details, or an exact artist.",
+        )
+        return self._parse_reverse_result(response)
 
     @staticmethod
     def _parse_reverse_result(value: str) -> tuple[str, str]:
@@ -363,7 +369,19 @@ class MofoxNaiService:
 
         qdrant_url = self.config.database.qdrant_url.strip()
         if not qdrant_url:
-            return search_local_images(self.config, stream_id, query, limit)
+            if archive_is_enabled(self.config):
+                return search_local_images(self.config, stream_id, query, limit)
+            rows = await list_core_image_messages(
+                stream_id,
+                limit=self.config.archive.history_scan_limit,
+                max_bytes=self.config.archive.max_image_bytes,
+            )
+            terms = [part.casefold() for part in query.split() if part]
+            return [
+                row
+                for row in rows
+                if any(term in row["source_text"].casefold() for term in terms)
+            ][: max(1, min(limit, 20))]
         vector = await self.embedding(query)
         body: dict[str, Any] = {
             "query": vector,
@@ -419,7 +437,7 @@ class MofoxNaiService:
         if options.username.strip() and options.api_key.strip():
             auth = (options.username.strip(), options.api_key.strip())
         base_url = options.base_url.rstrip("/")
-        headers = {"User-Agent": "MoFox-NAI/0.1.0 (plugin; contact repository maintainer)"}
+        headers = {"User-Agent": "MoFox-NAI/0.1.1 (plugin; contact repository maintainer)"}
         async with httpx.AsyncClient(timeout=self.config.models.timeout) as client:
             response = await client.get(
                 f"{base_url}/posts.json",

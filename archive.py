@@ -16,6 +16,8 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterator
 
+from src.app.plugin_system.api.stream_api import get_stream_messages
+
 from .config import MofoxNaiConfig
 
 
@@ -166,6 +168,49 @@ def message_images(message: Any, max_bytes: int) -> list[tuple[bytes, str]]:
         if decoded is not None:
             images.append(decoded)
     return images
+
+
+async def list_core_image_messages(
+    stream_id: str,
+    limit: int = 200,
+    max_bytes: int = 20 * 1024 * 1024,
+    exclude_message_id: str = "",
+) -> list[dict[str, Any]]:
+    """从 MoFox 核心聊天历史临时提取图片，不写入插件目录或数据库。"""
+
+    messages = await get_stream_messages(stream_id, limit=max(1, min(limit, 1000)))
+    rows: list[dict[str, Any]] = []
+    for message in reversed(messages):
+        message_id = str(getattr(message, "message_id", "") or "")
+        if not message_id or message_id == exclude_message_id:
+            continue
+        images = await asyncio.to_thread(message_images, message, max(1024, max_bytes))
+        if not images:
+            continue
+        content = getattr(message, "content", "")
+        source_text = str(
+            getattr(message, "processed_plain_text", "")
+            or (content if isinstance(content, str) else "")
+            or ""
+        )[:4000]
+        rows.append(
+            {
+                "message_id": message_id,
+                "stream_id": str(getattr(message, "stream_id", "") or stream_id),
+                "platform": str(getattr(message, "platform", "") or ""),
+                "sender_id": str(getattr(message, "sender_id", "") or ""),
+                "sender_name": str(getattr(message, "sender_name", "") or ""),
+                "direction": "outgoing" if getattr(message, "sender_role", "") == "bot" else "incoming",
+                "created_at": _message_timestamp(message),
+                "source_text": source_text,
+                "caption": "",
+                "tags": "",
+                "image_count": len(images),
+                # Bytes exist only in this request's memory and are ignored by metadata formatters.
+                "_images": images,
+            }
+        )
+    return rows
 
 
 def _message_timestamp(message: Any) -> float:
