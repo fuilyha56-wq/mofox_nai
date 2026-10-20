@@ -110,10 +110,10 @@ class NaiCommand(BaseCommand):
             if not sent:
                 raise RuntimeError("平台没有成功发送生成图片")
         except Exception as error:
-            logger.exception("/nai 生图失败")
+            logger.error("/nai 生图失败", exc_info=error)
             await self._reply(f"生图失败：{error}")
             return False, str(error)
-        return True, f"图片已发送。使用 Tag：{final_prompt[:500]}"
+        return True, f"图片已发送。使用提示词：{final_prompt[:500]}"
 
     async def _target_record(self) -> dict[str, Any] | None:
         """按当前附图、引用消息或当前流最近记录的顺序选择图片。"""
@@ -154,8 +154,8 @@ class NaiCommand(BaseCommand):
         limit = max(1, min(config.archive.history_scan_limit, 1000))
         try:
             messages = await get_stream_messages(self.stream_id, limit=limit)
-        except Exception:
-            logger.exception("读取 MoFox 历史消息失败")
+        except Exception as error:
+            logger.error("读取 MoFox 历史消息失败", exc_info=error)
             return
         for message in messages:
             direction = "outgoing" if getattr(message, "sender_role", "") == "bot" else "incoming"
@@ -165,8 +165,8 @@ class NaiCommand(BaseCommand):
             for image_data, extension in images:
                 try:
                     await archive_image(config, message, image_data, extension, direction)
-                except Exception:
-                    logger.exception("历史消息图片补录失败")
+                except Exception as error:
+                    logger.error("历史消息图片补录失败", exc_info=error)
 
     async def _target_core_image(self) -> tuple[bytes, str] | None:
         """在免保存模式下从消息对象或核心历史内存读取目标图片。"""
@@ -245,7 +245,7 @@ class NaiCommand(BaseCommand):
             sent = await self._reply(content, reply_to=original_message_id or None)
             return (True, content) if sent else (False, "Tag 已反推，但消息发送失败")
         except Exception as error:
-            logger.exception("/nai 反推失败")
+            logger.error("/nai 反推失败", exc_info=error)
             message = f"图片反推失败：{error}"
             await self._reply(message)
             return False, message
@@ -325,7 +325,7 @@ class NaiCommand(BaseCommand):
                     reply_to=self.message_id or None,
                 ) and sent
         except Exception as error:
-            logger.exception("归档图片读取失败")
+            logger.error("归档图片读取失败", exc_info=error)
             message = f"图片读取失败：{error}"
             await self._reply(message)
             return False, message

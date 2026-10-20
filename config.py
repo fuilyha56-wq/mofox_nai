@@ -31,7 +31,11 @@ class MofoxNaiConfig(BaseConfig):
         base_url: str = Field(default="http://127.0.0.1:31555/v1", description="OpenAI 兼容生图 API 根地址")
         api_key: str = Field(default="", description="生图 API Bearer Token")
         model: str = Field(default="nai-diffusion-4-5-full", description="生图模型名称")
-        prompt_model: str = Field(default="", description="可选的提示词整理模型；留空时直接把自然语言交给生图 API")
+        prompt_model: str = Field(default="", description="可选的专用提示词翻译模型；留空时复用 models.vision_model，直接输入 Tag 无需模型")
+        prompt_format: Literal["auto", "tags", "natural_language"] = Field(
+            default="auto",
+            description="翻译结果格式；auto 对 NAI V5 允许模型选择英文自然语言或 Tag，其他模型输出 Tag，NAI 4.5 始终输出 Tag",
+        )
         width: int = Field(default=832, description="默认图片宽度，建议为 64 的倍数")
         height: int = Field(default=1216, description="默认图片高度，建议为 64 的倍数")
         steps: int = Field(default=28, description="采样步数")

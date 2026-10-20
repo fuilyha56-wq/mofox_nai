@@ -55,7 +55,7 @@ class SearchImageHistoryTool(BaseTool):
                     if any(term in row["source_text"].casefold() for term in terms)
                 ][: max(1, min(limit, 10))]
         except Exception as error:
-            logger.exception("本地图片历史搜索失败")
+            logger.error("本地图片历史搜索失败", exc_info=error)
             return False, f"图库搜索失败：{error}"
         return True, {"count": len(rows), "images": _format_records(rows)}
 
@@ -87,7 +87,7 @@ class SearchImageDatabaseTool(BaseTool):
                 limit=max(1, min(limit, 10)),
             )
         except Exception as error:
-            logger.exception("图片数据库查询失败")
+            logger.error("图片数据库查询失败", exc_info=error)
             return False, f"图片数据库查询失败：{error}"
         return True, {"count": len(rows), "images": _format_records(rows)}
 
@@ -111,7 +111,7 @@ class SearchDanbooruTool(BaseTool):
         try:
             posts = await MofoxNaiService(config).search_danbooru(tags, limit)
         except Exception as error:
-            logger.exception("Danbooru 查询失败")
+            logger.error("Danbooru 查询失败", exc_info=error)
             return False, f"Danbooru 查询失败：{error}"
         return True, {"count": len(posts), "posts": posts}
 

@@ -59,18 +59,64 @@ class MofoxNaiService:
             or re.search(r"\b[a-z0-9]+_[a-z0-9_]+\b", lowered)
         )
 
+    def _translation_format(self) -> str:
+        """按 NAI 模型与配置选择提示词整理格式。"""
+
+        model_name = self.config.generation.model.casefold()
+        is_nai_45 = bool(re.search(r"(?:4[._ -]?5|v4[._ -]?5)", model_name))
+        if is_nai_45:
+            return "tags"
+
+        configured = self.config.generation.prompt_format
+        if configured != "auto":
+            return configured
+
+        is_nai_v5 = bool(
+            re.search(
+                r"(?:nai[-_ ]?diffusion[-_ ]?v?5|(?:^|[-_ ])v?5(?:$|[-_ ])|5-full)",
+                model_name,
+            )
+        )
+        return "v5_choice" if is_nai_v5 else "tags"
+
     async def prepare_prompt(self, prompt: str) -> str:
-        """必要时把自然语言整理为适合生图模型的英文 Tag。"""
+        """保留直接输入的 Tag，将自然语言翻译为当前 NAI 模型适用的提示词。"""
 
         clean_prompt = prompt.strip()
-        model = self.config.generation.prompt_model.strip()
+        model = (
+            self.config.generation.prompt_model.strip()
+            or self.config.models.vision_model.strip()
+        )
         if clean_prompt.lower().startswith("tag:"):
             return clean_prompt[4:].strip()
-        if not model or self._looks_like_tags(clean_prompt):
+        if self._looks_like_tags(clean_prompt):
             return clean_prompt
+        if not model:
+            raise ValueError(
+                "自然语言生图需要配置 [generation].prompt_model 或 [models].vision_model，以及 [models].base_url；"
+                "直接输入 Danbooru/NAI Tag 不需要翻译模型。"
+            )
         base_url = self.config.models.base_url.strip()
         if not base_url:
-            return clean_prompt
+            raise ValueError("自然语言生图需要配置 [models].base_url")
+
+        output_format = self._translation_format()
+        if output_format == "tags":
+            format_instruction = (
+                "Return only concise comma-separated English NovelAI/Danbooru-style tags. "
+                "Never return prose."
+            )
+        elif output_format == "natural_language":
+            format_instruction = (
+                "Return only one concise, fluent English natural-language image description. "
+                "Do not return a tag list."
+            )
+        else:
+            format_instruction = (
+                "This is an NAI V5 model. Choose whichever representation best preserves the request: "
+                "either a concise English natural-language image description or concise comma-separated "
+                "English NovelAI/Danbooru-style tags. Return only the chosen prompt, with no label or explanation."
+            )
 
         headers = self._headers(self.config.models.api_key)
         async with httpx.AsyncClient(timeout=self.config.models.timeout) as client:
@@ -85,9 +131,10 @@ class MofoxNaiService:
                         {
                             "role": "system",
                             "content": (
-                                "Convert the user's visual request into concise English NovelAI/Danbooru-style "
-                                "image tags. Preserve the described subject and composition. Do not invent identity "
-                                "or details. Return only comma-separated tags."
+                                "Translate the user's visual request into a prompt suitable for the configured "
+                                f"image model ({self.config.generation.model}). {format_instruction} "
+                                "Preserve the described subject, composition, style, and requested details. "
+                                "Do not invent identities or visual details."
                             ),
                         },
                         {"role": "user", "content": clean_prompt},
@@ -97,8 +144,11 @@ class MofoxNaiService:
             response.raise_for_status()
             data = response.json()
         value = self._message_text(data)
-        translated = value.strip().strip("`").removeprefix("tags:").strip()
-        return translated or clean_prompt
+        translated = value.strip().strip("`").strip()
+        translated = re.sub(r"^(?:tags?|prompt)\s*:\s*", "", translated, flags=re.IGNORECASE)
+        if not translated:
+            raise ValueError("提示词翻译模型没有返回可用提示词")
+        return translated
 
     async def generate_image(
         self,

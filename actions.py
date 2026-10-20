@@ -46,7 +46,7 @@ class GenerateNaiImageAction(BaseAction):
                 watermark_text=watermark_text or None,
             )
         except Exception as error:
-            logger.exception("LLM 生图 Action 失败")
+            logger.error("LLM 生图 Action 失败", exc_info=error)
             return False, f"生图失败：{error}"
 
         context = getattr(self.chat_stream, "context", None)
@@ -59,4 +59,4 @@ class GenerateNaiImageAction(BaseAction):
             processed_plain_text=f"[AI 图片: {prompt[:120]}]",
             reply_to=reply_to,
         )
-        return (True, f"图片已生成并发送。Tag: {final_prompt[:500]}") if sent else (False, "图片已生成，但发送失败")
+        return (True, f"图片已生成并发送。提示词: {final_prompt[:500]}") if sent else (False, "图片已生成，但发送失败")

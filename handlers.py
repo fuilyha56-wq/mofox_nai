@@ -55,8 +55,8 @@ class ArchiveChatImagesHandler(BaseEventHandler):
                         name=f"mofox_nai_index_{record.get('id', 'image')}",
                         daemon=True,
                     )
-            except Exception:
-                logger.exception("聊天图片归档失败")
+            except Exception as error:
+                logger.error("聊天图片归档失败", exc_info=error)
         return EventDecision.SUCCESS, params
 
     @staticmethod

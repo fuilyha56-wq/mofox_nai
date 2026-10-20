@@ -52,6 +52,6 @@ class MofoxNaiPlugin(BasePlugin):
             return
         try:
             await initialize_archive(config)
-        except Exception:
-            logger.exception("mofox_nai 图片归档数据库初始化失败")
+        except Exception as error:
+            logger.error("mofox_nai 图片归档数据库初始化失败", exc_info=error)
 

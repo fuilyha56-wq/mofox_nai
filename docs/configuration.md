@@ -10,7 +10,8 @@
 | `generation` | `base_url` | `http://127.0.0.1:31555/v1` | OpenAI 兼容生图 API 根地址 |
 | `generation` | `api_key` | 空 | 生图 API Token |
 | `generation` | `model` | `nai-diffusion-4-5-full` | 生图模型名 |
-| `generation` | `prompt_model` | 空 | 非空时将自然语言转为英文 Tag |
+| `generation` | `prompt_model` | 空 | 自然语言提示词翻译模型；留空时复用 `models.vision_model` |
+| `generation` | `prompt_format` | `auto` | `auto` 对 NAI V5 由翻译模型选择英文自然语言或 Tag，其他模型输出 Tag；NAI 4.5 始终输出 Tag |
 | `generation` | `width` / `height` | `832` / `1216` | 生图尺寸 |
 | `generation` | `steps` / `scale` | `28` / `5.0` | 采样参数 |
 | `generation` | `negative_prompt` | 常用质量排除词 | 默认负面提示词 |
