@@ -6,7 +6,7 @@
 | --- | --- | --- | --- |
 | `plugin` | `enabled` | `true` | 插件总开关 |
 | `plugin` | `action_enabled` | `true` | 是否注册 LLM 生图 Action |
-| `plugin` | `tools_enabled` | `true` | 是否注册图库、Qdrant 和 Danbooru 查询工具 |
+| `plugin` | `tools_enabled` | `true` | 是否注册图库、数据库和 Danbooru 查询工具 |
 | `generation` | `base_url` | `http://127.0.0.1:31555/v1` | OpenAI 兼容生图 API 根地址 |
 | `generation` | `api_key` | 空 | 生图 API Token |
 | `generation` | `model` | `nai-diffusion-4-5-full` | 生图模型名 |
@@ -27,7 +27,8 @@
 | `archive` | `history_scan_limit` | `200` | `/nai 历史`、查看、搜索与反推最多读取的核心历史消息数 |
 | `archive` | `auto_caption` | `false` | 后台调用视觉模型描述新图 |
 | `archive` | `auto_index` | `false` | 将有文本的图片记录嵌入并写入 Qdrant |
-| `database` | `qdrant_url` | 空 | Qdrant 地址；空时工具查询本地 SQLite 文本 |
+| `database` | `qdrant_url` | 空 | Qdrant 地址；配置后 `search_image_database` 优先进行向量查询 |
+| `database` | `sqlite_path` | 空 | 只读外部 NAI Tag SQLite 文件；未配置 Qdrant 时使用其中的 FTS5 Tag 索引；再无此项时才查询插件图片库/核心历史 |
 | `database` | `collection` | `mofox_images` | 预先创建的 Qdrant Collection |
 | `database` | `scope_to_stream` | `true` | Qdrant 按当前 stream ID 隔离 |
 | `danbooru` | `enabled` | `true` | Danbooru 查询开关 |
@@ -43,7 +44,7 @@
 | `watermark` | `color` / `opacity` | `#FFFFFF` / `190` | 颜色与 0–255 不透明度 |
 | `watermark` | `margin` / `shadow` | `24` / `true` | 边距与描边开关 |
 
-Qdrant 查询 API 使用 `POST /collections/{collection}/points/query`，索引使用 `PUT /collections/{collection}/points`。插件不会自动创建 Collection；其向量维度必须与配置的嵌入模型输出一致。
+Qdrant 查询 API 使用 `POST /collections/{collection}/points/query`，索引使用 `PUT /collections/{collection}/points`。插件不会自动创建 Collection；其向量维度必须与配置的嵌入模型输出一致。NAI Tag SQLite 数据库以只读方式打开，要求包含 `catalog_tags` 和 FTS5 虚表 `catalog_search`；该查询使用数据库自带的全文索引，不需要 Embeddings API。
 
 ### 免保存模式
 

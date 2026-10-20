@@ -10,7 +10,7 @@
 - 图片归档可选。默认 `persistent` 会把图片复制到本地图片目录与 SQLite；`off` 只从 MoFox 核心聊天历史临时读取，不在插件目录或插件数据库保存图片。
 - `/nai 查看 <记录ID或消息ID>` 重新发送图片；`/nai 搜索 <关键词>` 搜索当前聊天的描述、Tag 和原消息文本。
 - 可选的四角文字水印支持左上、右上、左下、右下位置，字体优先使用 **Noto Sans SC, sans-serif**。
-- LLM 可调用图库搜索、Qdrant 向量数据库搜索和 Danbooru 查询工具。Qdrant 语义搜索需要配置 OpenAI 兼容 Embeddings API。
+- LLM 可调用图片历史、Qdrant 向量库、只读 SQLite NAI Tag 目录和 Danbooru 查询工具。Qdrant 语义搜索需要配置 OpenAI 兼容 Embeddings API；Tag SQLite 使用数据库自带的 FTS5 索引。
 - Danbooru 默认强制 `rating:s`，可选配置用户名和 API Key。
 
 ## 命令
@@ -78,6 +78,14 @@ auto_caption = true
 auto_index = true
 ```
 
+如要查询 NAI Tag SQLite 目录，保持 `qdrant_url` 为空并填写只读数据库路径：
+
+```toml
+[database]
+qdrant_url = ""
+sqlite_path = "E:/data/nai-tags.sqlite3"
+```
+
 `auto_caption` 和 `auto_index` 默认关闭，避免每张聊天图片都产生额外模型请求。打开后，视觉描述与嵌入写入由 MoFox 任务管理器在后台处理。`scope_to_stream=true` 时向量检索只返回带当前聊天流 ID 的记录；只有当你确认外部 Collection 可供所有聊天共享时，才将其关闭。
 
 水印默认关闭。启用后设置水印内容，并确保机器安装 Noto Sans SC；若系统字体目录未被自动识别，请直接配置字体文件：
@@ -112,7 +120,7 @@ safe_only = true
 
 - `generate_nai_image`：按当前对话需求生成并发送图片。
 - `search_image_history`：只搜索当前流的本地图片历史。
-- `search_image_database`：查询配置的 Qdrant 向量库；没有配置 Qdrant 时退回当前流 SQLite 文本搜索。
+- `search_image_database`：优先查询配置的 Qdrant；未配置 Qdrant 时，若设置 `database.sqlite_path` 则只读查询 NAI Tag SQLite 的 FTS5 目录；否则退回本地图片库或当前流核心历史文本。
 - `search_danbooru`：按 Tag 查询 Danbooru。
 
 ## 隐私和保留

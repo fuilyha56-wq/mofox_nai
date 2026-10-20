@@ -24,6 +24,7 @@ from .archive import (
     update_image_description,
 )
 from .config import MofoxNaiConfig, archive_is_enabled
+from .tag_database import search_sqlite_catalog
 from .watermark import apply_watermark
 
 
@@ -365,10 +366,13 @@ class MofoxNaiService:
     async def search_database(
         self, query: str, stream_id: str, limit: int
     ) -> list[dict[str, Any]]:
-        """查询 Qdrant 语义图库，未配置时退回当前流 SQLite 文本搜索。"""
+        """查询 Qdrant、外部 Tag SQLite，或当前流图片历史。"""
 
         qdrant_url = self.config.database.qdrant_url.strip()
         if not qdrant_url:
+            sqlite_path = self.config.database.sqlite_path.strip()
+            if sqlite_path:
+                return await search_sqlite_catalog(sqlite_path, query, limit)
             if archive_is_enabled(self.config):
                 return search_local_images(self.config, stream_id, query, limit)
             rows = await list_core_image_messages(
@@ -437,7 +441,7 @@ class MofoxNaiService:
         if options.username.strip() and options.api_key.strip():
             auth = (options.username.strip(), options.api_key.strip())
         base_url = options.base_url.rstrip("/")
-        headers = {"User-Agent": "MoFox-NAI/0.1.1 (plugin; contact repository maintainer)"}
+        headers = {"User-Agent": "MoFox-NAI/0.1.2 (plugin; contact repository maintainer)"}
         async with httpx.AsyncClient(timeout=self.config.models.timeout) as client:
             response = await client.get(
                 f"{base_url}/posts.json",

@@ -61,12 +61,13 @@ class SearchImageHistoryTool(BaseTool):
 
 
 class SearchImageDatabaseTool(BaseTool):
-    """使用嵌入模型检索 Qdrant，或检索本地 SQLite 图片记录。"""
+    """使用嵌入模型检索 Qdrant，或查询 SQLite Tag/图片目录。"""
 
     name = "search_image_database"
     description = (
-        "查询插件配置的图片数据库。配置 Qdrant 与嵌入模型后会做向量语义检索；"
-        "未配置 Qdrant 时会搜索本地 SQLite 图片库；免保存模式则搜索当前聊天的 MoFox 核心历史文本。"
+        "查询配置的图片/Tag 数据库。配置 Qdrant 与嵌入模型后会做向量语义检索；"
+        "否则若 database.sqlite_path 指向 NAI Tag SQLite 目录，则用 FTS5 搜索标签、别名和描述；"
+        "都未配置时搜索本地图片库或当前聊天的 MoFox 核心历史文本。"
     )
 
     async def execute(
@@ -118,16 +119,25 @@ class SearchDanbooruTool(BaseTool):
 def _format_records(rows: list[dict]) -> list[dict]:
     """限制返回给 LLM 的图片元数据字段和文本长度。"""
 
-    return [
-        {
+    formatted: list[dict] = []
+    for row in rows:
+        item = {
             "id": row.get("id", row.get("record_id")),
             "message_id": str(row.get("message_id", ""))[:120],
             "created_at": row.get("created_at"),
             "sender": str(row.get("sender_name", ""))[:100],
-            "caption": str(row.get("caption", ""))[:500],
-            "tags": str(row.get("tags", ""))[:800],
+            "caption": str(row.get("display_name") or row.get("caption", ""))[:500],
+            "tags": str(row.get("name") or row.get("tags", ""))[:800],
             "text": str(row.get("source_text", ""))[:500],
             "score": row.get("score"),
         }
-        for row in rows
-    ]
+        for key, limit in (("category_label", 40), ("description", 1000), ("aliases", 500), ("source", 100), ("source_url", 500)):
+            value = row.get(key)
+            if value:
+                item[key] = str(value)[:limit]
+        if row.get("post_count") is not None:
+            item["post_count"] = row["post_count"]
+        if row.get("deprecated") is not None:
+            item["deprecated"] = row["deprecated"]
+        formatted.append(item)
+    return formatted

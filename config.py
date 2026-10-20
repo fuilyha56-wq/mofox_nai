@@ -73,11 +73,12 @@ class MofoxNaiConfig(BaseConfig):
 
     @config_section("database")
     class DatabaseSection(SectionBase):
-        """可选 Qdrant 向量数据库连接。"""
+        """外部图片向量库和可选 NAI Tag SQLite 目录。"""
 
-        qdrant_url: str = Field(default="", description="本地或远程 Qdrant HTTP 地址；留空时检索插件自己的 SQLite 图片库")
+        qdrant_url: str = Field(default="", description="本地或远程 Qdrant HTTP 地址；配置后优先查询 Qdrant")
         qdrant_api_key: str = Field(default="", description="Qdrant API Key（本地无认证可留空）")
         collection: str = Field(default="mofox_images", description="Qdrant Collection 名称")
+        sqlite_path: str = Field(default="", description="只读外部 NAI Tag SQLite 文件路径；Qdrant 未配置时优先查询该目录")
         default_limit: int = Field(default=5, description="查询工具默认返回数量，最多 10 条")
         scope_to_stream: bool = Field(default=True, description="Qdrant 查询默认限制在当前聊天流；关闭后会搜索整个配置的 Collection")
 
