@@ -429,11 +429,14 @@ class MofoxNaiService:
         prepared_prompt = await self.prepare_prompt(prompt)
         final_negative_prompt = negative_prompt.strip() or generation.negative_prompt
         api_format = self._generation_api_format()
-        if operation != "generate" and api_format != "novelai":
-            raise ValueError("参考图、重绘和局部重绘需要 [generation].api_format = 'novelai'")
+        native_request = api_format == "novelai" or (
+            api_format == "lfn" and operation != "generate"
+        )
+        if operation != "generate" and api_format not in {"novelai", "lfn"}:
+            raise ValueError("参考图、重绘和局部重绘需要 [generation].api_format = 'novelai' 或 'lfn'")
         if operation == "precise_reference" and not self.supports_precise_reference():
             raise ValueError("NAI Precise Reference 仅支持 NAI 4.5 模型；Vibe Transfer 可使用 /nai 参考")
-        if api_format == "novelai":
+        if native_request:
             endpoint = self._api_url(generation.base_url, "/ai/generate-image")
             headers = {
                 **self._headers(generation.api_key),
@@ -471,7 +474,12 @@ class MofoxNaiService:
                 seed=generation.seed,
             )
         else:
-            endpoint = self._api_url(generation.base_url, "/images/generations")
+            if api_format == "lfn":
+                base_path = urlsplit(generation.base_url.strip()).path.rstrip("/").casefold()
+                suffix = "/images/generations" if base_path.endswith("/v1") else "/v1/images/generations"
+            else:
+                suffix = "/images/generations"
+            endpoint = self._api_url(generation.base_url, suffix)
             headers = self._headers(generation.api_key)
             body = {
                 "model": generation.model,
@@ -494,18 +502,23 @@ class MofoxNaiService:
                 try:
                     response.raise_for_status()
                 except httpx.HTTPStatusError as error:
-                    if response.status_code == 404 and api_format == "novelai":
+                    if response.status_code == 404 and native_request:
                         raise ValueError(
                             "NAI 原生生图端点返回 404。插件已发送 NovelAI 原生格式，请检查 base_url 是否为 API 根地址，"
                             "并确认服务提供 /ai/generate-image；若刚更新插件，请重启 MoFox 后重试。"
                         ) from error
-                    if response.status_code == 404 and api_format == "openai":
+                    if response.status_code == 404 and api_format in {"openai", "lfn"}:
+                        if api_format == "lfn":
+                            raise ValueError(
+                                "Love for NAI 的 OpenAI 兼容生图端点返回 404；请确认 base_url 是 LFN 根地址，"
+                                "并确认服务提供 /v1/images/generations。"
+                            ) from error
                         raise ValueError(
                             "OpenAI 兼容生图端点返回 404。若服务使用 NAI 原生接口，请执行 /nai 设置 协议 novelai，"
                             "或在配置中设置 api_format = \"novelai\" 后重启 MoFox。"
                         ) from error
                     detail = " ".join(str(getattr(response, "text", "") or "").split())[:1200]
-                    if api_format == "novelai":
+                    if native_request:
                         reason = str(getattr(response, "reason_phrase", "") or "").strip()
                         status = f"HTTP {response.status_code} {reason}".strip()
                         message = f"NovelAI 原生生图接口返回 {status}"
@@ -514,8 +527,14 @@ class MofoxNaiService:
                         if detail:
                             message += f"。服务端响应：{detail}"
                         raise ValueError(message) from error
+                    if api_format == "lfn":
+                        detail = " ".join(str(getattr(response, "text", "") or "").split())[:1200]
+                        message = f"Love for NAI 的 OpenAI 兼容生图接口返回 HTTP {response.status_code}"
+                        if detail:
+                            message += f"。服务端响应：{detail}"
+                        raise ValueError(message) from error
                     raise
-                if api_format == "novelai":
+                if native_request:
                     return await self._extract_native_image(response, client)
                 return await self._extract_generated_image(response.json(), client)
 
@@ -531,8 +550,8 @@ class MofoxNaiService:
         """使用 NAI 原生独立放大端点处理被引用图片。"""
 
         generation = self.config.generation
-        if self._generation_api_format() != "novelai":
-            raise ValueError("NAI 放大需要 [generation].api_format = 'novelai'")
+        if self._generation_api_format() not in {"novelai", "lfn"}:
+            raise ValueError("NAI 放大需要 [generation].api_format = 'novelai' 或 'lfn'")
         if not image_data:
             raise ValueError("没有可放大的引用图片")
         endpoint = self._api_url(generation.base_url, "/ai/upscale")
@@ -572,8 +591,8 @@ class MofoxNaiService:
         """使用 NAI 原生 Director Tools 端点处理被引用图片。"""
 
         generation = self.config.generation
-        if self._generation_api_format() != "novelai":
-            raise ValueError("NAI Director Tools 需要 [generation].api_format = 'novelai'")
+        if self._generation_api_format() not in {"novelai", "lfn"}:
+            raise ValueError("NAI Director Tools 需要 [generation].api_format = 'novelai' 或 'lfn'")
         if not image_data:
             raise ValueError("没有可处理的引用图片")
         clean_type = request_type.strip()
@@ -771,16 +790,37 @@ class MofoxNaiService:
     async def reverse_image_bytes(self, image_data: bytes) -> tuple[str, str]:
         """只在内存中分析图片并返回 Tag，不更新本地或远端图库。"""
 
-        if self.config.models.reverse_backend == "wd14":
-            tags = await asyncio.to_thread(
+        backend = self.config.models.reverse_backend
+        if backend == "wd14":
+            return await asyncio.to_thread(
                 wd14_tag_image,
                 image_data,
                 self.config.models.wd14_model_path,
                 self.config.models.wd14_tags_path,
                 self.config.models.wd14_general_threshold,
                 self.config.models.wd14_character_threshold,
+            ), ""
+
+        if backend == "both":
+            wd14_tags, vision_result = await asyncio.gather(
+                asyncio.to_thread(
+                    wd14_tag_image,
+                    image_data,
+                    self.config.models.wd14_model_path,
+                    self.config.models.wd14_tags_path,
+                    self.config.models.wd14_general_threshold,
+                    self.config.models.wd14_character_threshold,
+                ),
+                self._vision_request(
+                    image_data,
+                    "You are an image tagging assistant. Describe only visible content. "
+                    "Return two lines exactly: 'Tags: ' followed by concise comma-separated English "
+                    "Danbooru-style tags; then 'Caption: ' followed by one short Chinese sentence. "
+                    "Do not guess real identities, hidden details, or an exact artist.",
+                ),
             )
-            return tags, ""
+            vision_tags, caption = self._parse_reverse_result(vision_result)
+            return self._merge_reverse_tags(wd14_tags, vision_tags), caption
 
         response = await self._vision_request(
             image_data,
@@ -790,6 +830,21 @@ class MofoxNaiService:
             "Do not guess real identities, hidden details, or an exact artist.",
         )
         return self._parse_reverse_result(response)
+
+    @staticmethod
+    def _merge_reverse_tags(*tag_groups: str) -> str:
+        """Merge model Tag lists while removing duplicates ignoring case and underscores."""
+
+        merged: list[str] = []
+        seen: set[str] = set()
+        for group in tag_groups:
+            for tag in group.split(","):
+                clean_tag = re.sub(r"\s+", " ", tag.strip())
+                key = clean_tag.replace("_", " ").casefold()
+                if clean_tag and key not in seen:
+                    seen.add(key)
+                    merged.append(clean_tag)
+        return ", ".join(merged)
 
     @staticmethod
     def _parse_reverse_result(value: str) -> tuple[str, str]:

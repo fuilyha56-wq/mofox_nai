@@ -10,7 +10,7 @@
 | `plugin` | `group_whitelist` / `group_blacklist` | 空列表 / 空列表 | 群号白名单与黑名单；白名单非空时仅名单内群可用，黑名单优先 |
 | `plugin` | `private_whitelist` / `private_blacklist` | 空列表 / 空列表 | 私聊用户 ID 白名单与黑名单；白名单非空时仅名单内用户可用，黑名单优先 |
 | `generation` | `base_url` | `http://127.0.0.1:31555/v1` | 生图 API 根地址；按协议拼接端点，也可直接填写完整端点 |
-| `generation` | `api_format` | `auto` | `auto` 按模型名和 URL 路径判断；也可指定 `openai` 或 NovelAI 原生格式 `novelai` |
+| `generation` | `api_format` | `auto` | `auto` 按模型名和 URL 路径判断；`openai` 使用 OpenAI 兼容接口，`novelai` 使用原生接口，`lfn` 为 Love for NAI 混合模式 |
 | `generation` | `api_key` | 空 | 生图 API Token |
 | `generation` | `model` | `nai-diffusion-4-5-full` | 生图模型名 |
 | `generation` | `prompt_model` | 空 | 自然语言提示词翻译和人设状态通知模型；留空时复用 `models.vision_model` |
@@ -25,7 +25,7 @@
 | `generation` | `negative_prompt` | 常用质量排除词 | 默认负面提示词 |
 | `models` | `base_url` / `api_key` | 本地 `/v1` / 空 | Chat Completions 与视觉模型 API |
 | `models` | `vision_model` | 空 | 视觉模型后端的图片 Tag 反推、视觉描述必填；也可作为翻译与人设状态通知模型 |
-| `models` | `reverse_backend` | `vision` | `/nai 反推` 使用的后端：`vision` 为多模态 API，`wd14` 为本地 ONNX |
+| `models` | `reverse_backend` | `vision` | `/nai 反推` 后端：`vision` 为多模态 API，`wd14` 为本地 ONNX，`both` 同时识别并合并去重 Tag |
 | `models` | `wd14_model_path` | 空 | WD14 `model.onnx` 文件路径，或同时包含模型和标签 CSV 的目录 |
 | `models` | `wd14_tags_path` | 空 | WD14 `selected_tags.csv` 路径；留空时读取模型同目录中的文件 |
 | `models` | `wd14_general_threshold` / `wd14_character_threshold` | `0.35` / `0.85` | 普通 Tag / 角色 Tag 最低置信度，范围 0–1 |
@@ -61,20 +61,22 @@ Qdrant 查询 API 使用 `POST /collections/{collection}/points/query`，索引�
 
 生图、参考、重绘、局部重绘、放大和 Director Tools 命令会先用 Core 当前人格与翻译/视觉模型生成一条状态消息。必须配置 `[models].base_url`，并配置 `[generation].prompt_model` 或 `[models].vision_model`；如果状态消息生成或发送失败，插件会取消图片请求，避免跳过这条状态提示。
 
-`/nai 反推` 默认使用多模态视觉 API。要改用本地 WD14 Tagger，请配置：
+`/nai 反推` 默认使用多模态视觉 API。要改用本地 WD14 Tagger，或同时运行两个识别器并合并去重标签，请配置：
 
 ```toml
 [models]
-reverse_backend = "wd14"
+reverse_backend = "both"
 wd14_model_path = "E:/models/wd14/model.onnx"
 wd14_tags_path = "E:/models/wd14/selected_tags.csv"
 wd14_general_threshold = 0.35
 wd14_character_threshold = 0.85
 ```
 
+将 `reverse_backend` 设为 `both` 可同时运行 WD14 和视觉模型；WD14 标签优先排列，视觉模型补充标签并提供中文描述。两个识别请求并行处理。两个模式都需要配置 WD14 的模型文件路径；`both` 还需要配置 `vision_model` 和聊天模型 API。
+
 模型和标签 CSV 必须来自同一 WD14 模型版本；可使用 [SmilingWolf 的 WD14 ConvNextV2 Tagger v2](https://huggingface.co/SmilingWolf/wd-v1-4-convnextv2-tagger-v2/tree/v2.0) 中的 `model.onnx` 与 `selected_tags.csv`。模型文件需自行下载，插件不会自动联网下载数百 MB 的权重。`onnxruntime` 随插件依赖安装，推理在本机 CPU 上完成；WD14 返回 Tag，不会另外生成图片描述。角色 Tag 阈值默认高于普通 Tag，以减少角色名误报。将 `reverse_backend` 设回 `vision` 即可恢复视觉 API 反推。
 
-`api_format = "openai"` 使用 `POST /images/generations`，接受 OpenAI 风格的 `data[0].b64_json` 或 `data[0].url`。`api_format = "novelai"` 使用 `POST /ai/generate-image` 与 NovelAI 原生请求格式，通过 `Accept: application/json` 优先接收 `images[].image` Base64，也能直接读取原生 ZIP 图片响应。`auto` 对 `nai-diffusion-*` 模型且 URL 中不含 `/v1` 的配置选择原生格式；包含 `/v1` 则选择 OpenAI 兼容格式。对于 NAI 原生服务，请显式指定 `novelai`；可用 `/nai 设置 协议 novelai` 实时切换。
+`api_format = "openai"` 使用 OpenAI 兼容生图端点，接受 `data[0].b64_json` 或 `data[0].url`。`api_format = "novelai"` 使用 `POST /ai/generate-image` 与 NovelAI 原生请求格式，通过 `Accept: application/json` 优先接收 `images[].image` Base64，也能直接读取原生 ZIP 图片响应。`api_format = "lfn"` 面向 Love for NAI：普通生图经 `/v1/images/generations` 读取兼容 JSON 响应，参考、重绘、局部重绘、放大和 Director Tools 仍使用 NAI 原生 `/ai` 端点。LFN 的 `base_url` 填根地址即可；模型可使用 NAI 官方名（例如 `nai-diffusion-5-full`）。`auto` 对 `nai-diffusion-*` 模型且 URL 中不含 `/v1` 的配置选择原生格式；包含 `/v1` 则选择 OpenAI 兼容格式。可用 `/nai 设置 协议 lfn` 实时切换。
 
 引用图片可使用原生 `/ai/augment-image` Director Tools：`/nai 导演 <req_type> [defry] [提示词]`。请先回复目标图片；`req_type` 由所连接的 NAI 服务决定，插件不会猜测或改写不同服务版本的工具枚举。
 

@@ -49,9 +49,9 @@ class MofoxNaiConfig(BaseConfig):
         """OpenAI 兼容或 NovelAI 原生生图接口和默认参数。"""
 
         base_url: str = Field(default="http://127.0.0.1:31555/v1", description="生图 API 根地址；支持 OpenAI 兼容与 NovelAI 原生接口")
-        api_format: Literal["auto", "openai", "novelai"] = Field(
+        api_format: Literal["auto", "openai", "novelai", "lfn"] = Field(
             default="auto",
-            description="生图协议；NAI 原生端点建议明确指定 novelai；auto 按模型和 URL 判断，也可指定 openai",
+            description="生图协议；novelai 使用 NAI 原生接口，lfn 对 Love for NAI 普通生图走 /v1 并保留原生图像工具，也可选择 openai 或 auto",
         )
         api_key: str = Field(default="", description="生图 API Bearer Token")
         model: str = Field(default="nai-diffusion-4-5-full", description="生图模型名称")
@@ -88,9 +88,9 @@ class MofoxNaiConfig(BaseConfig):
         base_url: str = Field(default="http://127.0.0.1:31555/v1", description="OpenAI 兼容聊天模型 API 根地址")
         api_key: str = Field(default="", description="聊天模型 API Bearer Token")
         vision_model: str = Field(default="", description="支持图片输入的视觉模型，用于 /nai 反推和可选图库标注")
-        reverse_backend: Literal["vision", "wd14"] = Field(
+        reverse_backend: Literal["vision", "wd14", "both"] = Field(
             default="vision",
-            description="/nai 反推识别后端；vision 使用多模态 API，wd14 使用本地 ONNX 模型",
+            description="/nai 反推识别后端；vision 使用多模态 API，wd14 使用本地 ONNX 模型，both 同时运行并合并结果",
         )
         wd14_model_path: str = Field(
             default="",

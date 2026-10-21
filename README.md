@@ -68,28 +68,30 @@ steps = 28
 scale = 5.0
 ```
 
-`api_format = "auto"` 会在模型名为 `nai-diffusion-*` 且地址不含 `/v1` 时使用 NovelAI 原生请求格式；地址含 `/v1` 时使用 OpenAI 兼容格式。你的 NAI 原生服务请设置 `api_format = "novelai"`，避免自动判断或旧配置选错协议；也可明确设为 `openai`。例如原生接口地址可配置为 `http://127.0.0.1:41800`，插件会请求 `/ai/generate-image`；`api_key` 填写服务要求的 Bearer Token。NovelAI 原生模式发送 `action`、`input`、`model` 和 `parameters` 字段，并能读取 JSON Base64 或 ZIP 图片响应。使用代理自定义路径时，可将完整 `/ai/generate-image` 地址填入 `base_url`，或将 `api_format` 指定为 `novelai`。
+`api_format = "auto"` 会在模型名为 `nai-diffusion-*` 且地址不含 `/v1` 时使用 NovelAI 原生请求格式；地址含 `/v1` 时使用 OpenAI 兼容格式。原生服务可设 `api_format = "novelai"`。连接 Love for NAI 时建议设 `api_format = "lfn"`、`base_url` 填 LFN 根地址：普通生图走 `/v1/images/generations`，引用图片、重绘、放大和 Director Tools 继续走原生 `/ai` 接口。NAI 原生模式仍受支持，可读取 JSON Base64 或 ZIP 图片响应。
 
 自然语言生图会使用 `prompt_model`；留空时复用 `[models].vision_model`，并通过兼容 Chat Completions 的 `[models].base_url` 请求。`prompt_format = "auto"` 会对 NAI 4.5 强制输出 Tag，并允许 NAI V5 翻译模型自行选择英文自然语言或 Tag；其他模型默认输出 Tag。也可以设置 `tags` 或 `natural_language` 指定翻译格式，但 NAI 4.5 始终只输出 Tag。直接输入 Tag 不需要提示词翻译模型。
 
-反推默认使用支持多模态输入的 OpenAI 兼容 Chat Completions 模型。也可以将 `/nai 反推` 切换为本地 WD14 ONNX Tagger：
+反推默认使用支持多模态输入的 OpenAI 兼容 Chat Completions 模型。也可以单独使用本地 WD14 ONNX Tagger，或通过 `reverse_backend = "both"` 同时运行 WD14 和视觉模型：
 
 ```toml
 [models]
 base_url = "http://127.0.0.1:31555/v1"
 api_key = ""
 vision_model = "your-vision-model"
-reverse_backend = "vision"
+reverse_backend = "both"
+wd14_model_path = "E:/models/wd14/model.onnx"
+wd14_tags_path = "E:/models/wd14/selected_tags.csv"
 embedding_base_url = "http://127.0.0.1:8000/v1"
 embedding_api_key = ""
 embedding_model = "your-embedding-model"
 ```
 
-切换为 WD14 时，准备同一模型版本的 `model.onnx` 和 `selected_tags.csv`，然后设置：
+WD14 路径必须指向同一模型版本的 `model.onnx` 和 `selected_tags.csv`。如果只想用 WD14，可将 `reverse_backend` 设为 `wd14`；同时使用两种识别器时设为 `both`。
 
 ```toml
 [models]
-reverse_backend = "wd14"
+reverse_backend = "both"
 wd14_model_path = "E:/models/wd14/model.onnx"
 wd14_tags_path = "E:/models/wd14/selected_tags.csv"
 wd14_general_threshold = 0.35

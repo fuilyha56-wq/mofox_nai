@@ -103,6 +103,10 @@ async def _async_immediate(function, *args):
     return function(*args)
 
 
+async def _gather_immediate(*awaitables):
+    return tuple([await awaitable for awaitable in awaitables])
+
+
 class NativeOperationTests(unittest.TestCase):
     def setUp(self) -> None:
         _Client.requests = []
@@ -137,6 +141,39 @@ class NativeOperationTests(unittest.TestCase):
         self.assertEqual(params["reference_information_extracted"], 0.63)
         self.assertNotIn("image", params)
         self.assertEqual(result, b"generated-image")
+
+    def test_lfn_mode_uses_openai_endpoint_for_generation_and_reads_base64(self) -> None:
+        self.config.generation.api_format = "lfn"
+        self.config.generation.base_url = "http://lfn.test"
+        png = BytesIO()
+        Image.new("RGB", (2, 2), "#7FA0C0").save(png, format="PNG")
+        encoded = base64.b64encode(png.getvalue()).decode("ascii")
+        _Client.responses = [_Response({"data": [{"b64_json": encoded}]})]
+
+        with patch("plugins.mofox_nai.service.httpx.AsyncClient", _Client):
+            image_data, _ = _run_immediate(MofoxNaiService(self.config).generate_image("1girl"))
+
+        url, request = _Client.requests[0]
+        self.assertEqual(url, "http://lfn.test/v1/images/generations")
+        self.assertEqual(request["json"]["model"], "nai-diffusion-5-full")
+        self.assertEqual(request["json"]["prompt"], "1girl")
+        self.assertEqual(image_data, png.getvalue())
+
+    def test_lfn_mode_keeps_reference_operations_on_nai_native_endpoint(self) -> None:
+        self.config.generation.api_format = "lfn"
+        _Client.responses = [_native_image_response()]
+
+        with patch("plugins.mofox_nai.service.httpx.AsyncClient", _Client):
+            _run_immediate(
+                MofoxNaiService(self.config).generate_image(
+                    "1girl", operation="reference", source_image=b"reference"
+                )
+            )
+
+        url, request = _Client.requests[0]
+        self.assertEqual(url, "https://nai.test/ai/generate-image")
+        self.assertIn("input", request["json"])
+        self.assertNotIn("prompt", request["json"])
 
     def test_vibe_transfer_supports_multiple_images_from_one_quoted_message(self) -> None:
         _Client.responses = [_native_image_response()]
@@ -481,7 +518,7 @@ class NativeOperationTests(unittest.TestCase):
     def test_protocol_setting_command_updates_live_config(self) -> None:
         command = SimpleNamespace(
             _config=lambda: self.config,
-            _remainder=lambda _: "协议 novelai",
+            _remainder=lambda _: "协议 lfn",
             _is_settings_admin=lambda _: True,
             _update_config=lambda config, target, field, value: setattr(target, field, value),
             _reply=AsyncMock(return_value=True),
@@ -490,7 +527,7 @@ class NativeOperationTests(unittest.TestCase):
         ok, _ = _run_immediate(NaiCommand.handle_settings(command))
 
         self.assertTrue(ok)
-        self.assertEqual(self.config.generation.api_format, "novelai")
+        self.assertEqual(self.config.generation.api_format, "lfn")
         command._reply.assert_awaited_once()
 
     def test_director_command_replies_to_the_quoted_source(self) -> None:
@@ -783,6 +820,31 @@ class NativeOperationTests(unittest.TestCase):
             outputs.append(result)
 
         self.assertEqual(len(set(outputs)), 4)
+
+
+class ReverseBackendTests(unittest.TestCase):
+    def test_reverse_tags_can_merge_wd14_and_vision_results(self) -> None:
+        config = MofoxNaiConfig()
+        config.models.reverse_backend = "both"
+        config.models.wd14_model_path = "C:/models/wd14/model.onnx"
+        service = MofoxNaiService(config)
+        with (
+            patch("plugins.mofox_nai.service.asyncio.to_thread", new=_async_immediate),
+            patch("plugins.mofox_nai.service.asyncio.gather", new=_gather_immediate),
+            patch("plugins.mofox_nai.service.wd14_tag_image", return_value="1girl, blue_eyes, solo") as tagger,
+            patch.object(
+                service,
+                "_vision_request",
+                new=AsyncMock(
+                    return_value="Tags: 1girl, blue eyes, long_hair\nCaption: 蓝眼角色留着长发。"
+                ),
+            ) as vision,
+        ):
+            result = _run_immediate(service.reverse_image_bytes(b"image bytes"))
+
+        self.assertEqual(result, ("1girl, blue_eyes, solo, long_hair", "蓝眼角色留着长发。"))
+        tagger.assert_called_once()
+        vision.assert_awaited_once()
 
 
 if __name__ == "__main__":

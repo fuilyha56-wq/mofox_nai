@@ -260,9 +260,12 @@ class NaiCommand(BaseCommand):
                     "auto": "auto", "自动": "auto",
                     "openai": "openai", "兼容": "openai", "openai兼容": "openai",
                     "novelai": "novelai", "原生": "novelai", "nai原生": "novelai",
+                    "lfn": "lfn", "lovefornai": "lfn", "love for nai": "lfn",
                 }.get(value.casefold())
                 if protocol is None:
-                    raise ValueError("生图协议可选：novelai（NAI 原生）、openai（OpenAI 兼容）或 auto")
+                    raise ValueError(
+                        "生图协议可选：lfn（Love for NAI 混合模式）、novelai（NAI 原生）、openai（OpenAI 兼容）或 auto"
+                    )
                 self._update_config(config, generation, "api_format", protocol)
                 current = protocol
             else:
