@@ -88,6 +88,24 @@ class MofoxNaiConfig(BaseConfig):
         base_url: str = Field(default="http://127.0.0.1:31555/v1", description="OpenAI 兼容聊天模型 API 根地址")
         api_key: str = Field(default="", description="聊天模型 API Bearer Token")
         vision_model: str = Field(default="", description="支持图片输入的视觉模型，用于 /nai 反推和可选图库标注")
+        reverse_backend: Literal["vision", "wd14"] = Field(
+            default="vision",
+            description="/nai 反推识别后端；vision 使用多模态 API，wd14 使用本地 ONNX 模型",
+        )
+        wd14_model_path: str = Field(
+            default="",
+            description="WD14 ONNX 模型文件路径，或同时包含 model.onnx 与 selected_tags.csv 的目录",
+        )
+        wd14_tags_path: str = Field(
+            default="",
+            description="WD14 selected_tags.csv 路径；留空时从模型文件同目录读取",
+        )
+        wd14_general_threshold: float = Field(
+            default=0.35, ge=0, le=1, description="WD14 普通 Tag 的最低置信度，范围 0–1"
+        )
+        wd14_character_threshold: float = Field(
+            default=0.85, ge=0, le=1, description="WD14 角色 Tag 的最低置信度，范围 0–1"
+        )
         embedding_base_url: str = Field(default="", description="OpenAI 兼容 Embeddings API 根地址；留空时使用 models.base_url")
         embedding_api_key: str = Field(default="", description="嵌入模型 API Bearer Token；留空时使用 models.api_key")
         embedding_model: str = Field(default="", description="文本嵌入模型名称，用于 Qdrant 语义检索")

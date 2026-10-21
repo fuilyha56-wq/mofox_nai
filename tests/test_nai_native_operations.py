@@ -446,6 +446,29 @@ class NativeOperationTests(unittest.TestCase):
         self.assertTrue(image_url.startswith("data:image/png;base64,"))
         self.assertEqual(request["model"], "vision-model")
 
+    def test_reverse_tags_can_use_local_wd14_without_calling_vision_api(self) -> None:
+        self.config.models.reverse_backend = "wd14"
+        self.config.models.wd14_model_path = "C:/models/wd14/model.onnx"
+        self.config.models.wd14_tags_path = "C:/models/wd14/selected_tags.csv"
+        self.config.models.wd14_general_threshold = 0.4
+        self.config.models.wd14_character_threshold = 0.9
+
+        with (
+            patch("plugins.mofox_nai.service.asyncio.to_thread", new=_async_immediate),
+            patch("plugins.mofox_nai.service.wd14_tag_image", return_value="1girl, pink_hair") as tagger,
+        ):
+            result = _run_immediate(MofoxNaiService(self.config).reverse_image_bytes(b"image bytes"))
+
+        self.assertEqual(result, ("1girl, pink_hair", ""))
+        tagger.assert_called_once_with(
+            b"image bytes",
+            "C:/models/wd14/model.onnx",
+            "C:/models/wd14/selected_tags.csv",
+            0.4,
+            0.9,
+        )
+        self.assertEqual(_Client.requests, [])
+
     def test_active_style_is_applied_and_queue_mode_is_configurable(self) -> None:
         self.config.generation.active_style = "柔光"
         service = MofoxNaiService(self.config)

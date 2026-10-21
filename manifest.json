@@ -1,12 +1,12 @@
 {
   "name": "mofox_nai",
   "display_name": "MoFox NAI 图片创作与图库",
-  "version": "0.1.8",
-  "description": "自然语言提示词翻译与 NAI 原生生图、引用图像处理、视觉反推、可选聊天图片归档、水印、Qdrant 向量检索、SQLite Tag 查询与 Danbooru 查询。",
+  "version": "0.1.9",
+  "description": "自然语言提示词翻译与 NAI 原生生图、引用图像处理、视觉模型和 WD14 本地反推、可选聊天图片归档、水印、Qdrant 向量检索、SQLite Tag 查询与 Danbooru 查询。",
   "author": "Lycoris radiata",
   "license": "AGPL-3.0-only",
   "categories": ["tool"],
-  "tags": ["image-generation", "novelai", "danbooru", "vision", "embedding", "archive"],
+  "tags": ["image-generation", "novelai", "danbooru", "vision", "wd14", "embedding", "archive"],
   "dependencies": {
     "plugins": [],
     "components": []
@@ -56,6 +56,6 @@
     "stream_api": "2.0.0",
     "log_api": "1.0.0"
   },
-  "python_dependencies": ["httpx", "Pillow"],
+  "python_dependencies": ["httpx", "Pillow", "onnxruntime"],
   "dependencies_required": true
 }

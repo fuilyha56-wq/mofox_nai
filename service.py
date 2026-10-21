@@ -27,6 +27,7 @@ from .archive import (
 from .config import MofoxNaiConfig, archive_is_enabled
 from .tag_database import search_sqlite_catalog
 from .watermark import apply_watermark
+from .wd14 import tag_image as wd14_tag_image
 
 
 _GENERATION_QUEUE_LOCK = asyncio.Lock()
@@ -757,7 +758,8 @@ class MofoxNaiService:
 
         image_data = await asyncio.to_thread(read_image_file, record)
         tags, caption = await self.reverse_image_bytes(image_data)
-        update_image_description(self.config, int(record["id"]), caption, tags)
+        stored_caption = caption or str(record.get("caption", ""))
+        update_image_description(self.config, int(record["id"]), stored_caption, tags)
         if self.config.database.qdrant_url.strip():
             refreshed = get_image_record(
                 self.config, record_id=int(record["id"]), stream_id=str(record["stream_id"])
@@ -768,6 +770,17 @@ class MofoxNaiService:
 
     async def reverse_image_bytes(self, image_data: bytes) -> tuple[str, str]:
         """只在内存中分析图片并返回 Tag，不更新本地或远端图库。"""
+
+        if self.config.models.reverse_backend == "wd14":
+            tags = await asyncio.to_thread(
+                wd14_tag_image,
+                image_data,
+                self.config.models.wd14_model_path,
+                self.config.models.wd14_tags_path,
+                self.config.models.wd14_general_threshold,
+                self.config.models.wd14_character_threshold,
+            )
+            return tags, ""
 
         response = await self._vision_request(
             image_data,

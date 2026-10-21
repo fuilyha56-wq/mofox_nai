@@ -72,17 +72,31 @@ scale = 5.0
 
 自然语言生图会使用 `prompt_model`；留空时复用 `[models].vision_model`，并通过兼容 Chat Completions 的 `[models].base_url` 请求。`prompt_format = "auto"` 会对 NAI 4.5 强制输出 Tag，并允许 NAI V5 翻译模型自行选择英文自然语言或 Tag；其他模型默认输出 Tag。也可以设置 `tags` 或 `natural_language` 指定翻译格式，但 NAI 4.5 始终只输出 Tag。直接输入 Tag 不需要提示词翻译模型。
 
-反推与自动描述使用支持多模态输入的 OpenAI 兼容 Chat Completions 模型：
+反推默认使用支持多模态输入的 OpenAI 兼容 Chat Completions 模型。也可以将 `/nai 反推` 切换为本地 WD14 ONNX Tagger：
 
 ```toml
 [models]
 base_url = "http://127.0.0.1:31555/v1"
 api_key = ""
 vision_model = "your-vision-model"
+reverse_backend = "vision"
 embedding_base_url = "http://127.0.0.1:8000/v1"
 embedding_api_key = ""
 embedding_model = "your-embedding-model"
 ```
+
+切换为 WD14 时，准备同一模型版本的 `model.onnx` 和 `selected_tags.csv`，然后设置：
+
+```toml
+[models]
+reverse_backend = "wd14"
+wd14_model_path = "E:/models/wd14/model.onnx"
+wd14_tags_path = "E:/models/wd14/selected_tags.csv"
+wd14_general_threshold = 0.35
+wd14_character_threshold = 0.85
+```
+
+官方 WD14 模型文件可从 [SmilingWolf WD14 ConvNextV2 Tagger v2](https://huggingface.co/SmilingWolf/wd-v1-4-convnextv2-tagger-v2/tree/v2.0) 获取。插件依赖会安装 `onnxruntime`，模型在本机 CPU 推理，不会自动下载模型权重；WD14 只返回标签，不提供描述文本。
 
 默认情况下，图片本体保存在 `data/mofox_nai/images/`，索引保存在 `data/mofox_nai/images.sqlite3`。如不希望插件另存图片，在生成的配置文件中设置：
 

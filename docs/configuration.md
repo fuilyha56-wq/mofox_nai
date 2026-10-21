@@ -24,7 +24,11 @@
 | `generation` | `sampler` / `noise_schedule` / `seed` | `k_euler_ancestral` / `karras` / `-1` | NAI 原生采样设置；`-1` 表示随机种子 |
 | `generation` | `negative_prompt` | 常用质量排除词 | 默认负面提示词 |
 | `models` | `base_url` / `api_key` | 本地 `/v1` / 空 | Chat Completions 与视觉模型 API |
-| `models` | `vision_model` | 空 | 图片 Tag 反推、视觉描述必填；也可作为翻译与人设状态通知模型 |
+| `models` | `vision_model` | 空 | 视觉模型后端的图片 Tag 反推、视觉描述必填；也可作为翻译与人设状态通知模型 |
+| `models` | `reverse_backend` | `vision` | `/nai 反推` 使用的后端：`vision` 为多模态 API，`wd14` 为本地 ONNX |
+| `models` | `wd14_model_path` | 空 | WD14 `model.onnx` 文件路径，或同时包含模型和标签 CSV 的目录 |
+| `models` | `wd14_tags_path` | 空 | WD14 `selected_tags.csv` 路径；留空时读取模型同目录中的文件 |
+| `models` | `wd14_general_threshold` / `wd14_character_threshold` | `0.35` / `0.85` | 普通 Tag / 角色 Tag 最低置信度，范围 0–1 |
 | `models` | `embedding_base_url` | 空 | 留空则用 `models.base_url` |
 | `models` | `embedding_model` | 空 | Qdrant 语义检索的 Embeddings 模型 |
 | `archive` | `enabled` | `true` | 图片消息归档开关 |
@@ -56,6 +60,19 @@
 Qdrant 查询 API 使用 `POST /collections/{collection}/points/query`，索引使用 `PUT /collections/{collection}/points`。插件不会自动创建 Collection；其向量维度必须与配置的嵌入模型输出一致。NAI Tag SQLite 数据库以只读方式打开，要求包含 `catalog_tags` 和 FTS5 虚表 `catalog_search`；该查询使用数据库自带的全文索引，不需要 Embeddings API。
 
 生图、参考、重绘、局部重绘、放大和 Director Tools 命令会先用 Core 当前人格与翻译/视觉模型生成一条状态消息。必须配置 `[models].base_url`，并配置 `[generation].prompt_model` 或 `[models].vision_model`；如果状态消息生成或发送失败，插件会取消图片请求，避免跳过这条状态提示。
+
+`/nai 反推` 默认使用多模态视觉 API。要改用本地 WD14 Tagger，请配置：
+
+```toml
+[models]
+reverse_backend = "wd14"
+wd14_model_path = "E:/models/wd14/model.onnx"
+wd14_tags_path = "E:/models/wd14/selected_tags.csv"
+wd14_general_threshold = 0.35
+wd14_character_threshold = 0.85
+```
+
+模型和标签 CSV 必须来自同一 WD14 模型版本；可使用 [SmilingWolf 的 WD14 ConvNextV2 Tagger v2](https://huggingface.co/SmilingWolf/wd-v1-4-convnextv2-tagger-v2/tree/v2.0) 中的 `model.onnx` 与 `selected_tags.csv`。模型文件需自行下载，插件不会自动联网下载数百 MB 的权重。`onnxruntime` 随插件依赖安装，推理在本机 CPU 上完成；WD14 返回 Tag，不会另外生成图片描述。角色 Tag 阈值默认高于普通 Tag，以减少角色名误报。将 `reverse_backend` 设回 `vision` 即可恢复视觉 API 反推。
 
 `api_format = "openai"` 使用 `POST /images/generations`，接受 OpenAI 风格的 `data[0].b64_json` 或 `data[0].url`。`api_format = "novelai"` 使用 `POST /ai/generate-image` 与 NovelAI 原生请求格式，通过 `Accept: application/json` 优先接收 `images[].image` Base64，也能直接读取原生 ZIP 图片响应。`auto` 对 `nai-diffusion-*` 模型且 URL 中不含 `/v1` 的配置选择原生格式；包含 `/v1` 则选择 OpenAI 兼容格式。对于 NAI 原生服务，请显式指定 `novelai`；可用 `/nai 设置 协议 novelai` 实时切换。
 
