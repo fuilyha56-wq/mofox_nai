@@ -20,6 +20,7 @@ from src.app.plugin_system.base import BaseCommand, cmd_route
 from src.app.plugin_system.types import PermissionLevel
 from src.kernel.logger import get_logger
 
+from .access import chat_access
 from .archive import (
     archive_image,
     get_image_record,
@@ -46,6 +47,12 @@ class NaiCommand(BaseCommand):
     async def execute(self, message_text: str) -> tuple[bool, str]:
         """保留命令基类的 Trie 路由行为。"""
 
+        config = self._config()
+        if config is not None:
+            allowed, reason = chat_access(config, self._message)
+            if not allowed:
+                logger.info(f"忽略访问范围之外的 /nai 命令: stream={self.stream_id}")
+                return True, reason
         return await super().execute(message_text)
 
     def _config(self) -> MofoxNaiConfig | None:
@@ -161,11 +168,13 @@ class NaiCommand(BaseCommand):
             ("噪声调度", config.generation.noise_schedule),
             ("请求模式", "排队" if config.generation.request_mode == "queue" else "并行"),
             ("画风", config.generation.active_style or "默认"),
+            ("精准参考强度", f"{config.generation.precise_reference_strength:g}"),
+            ("精准参考忠实度", f"{config.generation.precise_reference_fidelity:g}"),
         ]
         if not raw:
             message = (
                 "参数会立即作用于后续请求并写入插件配置。\n"
-                "用法：/nai 设置 协议 novelai，或设置 分辨率、宽度、步数、CFG、种子、采样器、噪声调度、并发、参考强度、重绘强度、噪声、负面词。"
+                "用法：/nai 设置 协议 novelai，或设置 分辨率、宽度、步数、CFG、种子、采样器、噪声调度、并发、参考强度、精准参考强度、精准参考忠实度、重绘强度、噪声、负面词。"
             )
             await self._reply(message, title="当前生图设置", status="LIVE", details=details, accent=CYAN)
             return True, message
@@ -187,6 +196,8 @@ class NaiCommand(BaseCommand):
             "concurrency": "request_mode", "并发": "request_mode", "队列": "request_mode", "请求模式": "request_mode",
             "参考强度": "reference_strength", "reference_strength": "reference_strength",
             "参考信息": "reference_information", "reference_information": "reference_information",
+            "精准参考强度": "precise_reference_strength", "precise_reference_strength": "precise_reference_strength",
+            "精准参考忠实度": "precise_reference_fidelity", "precise_reference_fidelity": "precise_reference_fidelity",
             "重绘强度": "redraw_strength", "redraw_strength": "redraw_strength",
             "噪声": "redraw_noise", "redraw_noise": "redraw_noise",
             "seed": "seed", "种子": "seed",
@@ -194,7 +205,7 @@ class NaiCommand(BaseCommand):
         }
         normalized = aliases.get(key)
         if not normalized:
-            message = "可设置：协议、分辨率、宽度、高度、步数、CFG、种子、采样器、噪声调度、并发、参考强度、参考信息、重绘强度、噪声、负面词。"
+            message = "可设置：协议、分辨率、宽度、高度、步数、CFG、种子、采样器、噪声调度、并发、参考强度、参考信息、精准参考强度、精准参考忠实度、重绘强度、噪声、负面词。"
             await self._reply(message, title="未知参数", status="NOT FOUND", accent=RED)
             return False, message
         try:
@@ -231,7 +242,7 @@ class NaiCommand(BaseCommand):
                     raise ValueError("种子值范围为 -1–2147483647；-1 表示每次随机")
                 self._update_config(config, generation, "seed", seed)
                 current = "随机" if seed == -1 else str(seed)
-            elif normalized in {"scale", "reference_strength", "reference_information", "redraw_strength", "redraw_noise"}:
+            elif normalized in {"scale", "reference_strength", "reference_information", "precise_reference_strength", "precise_reference_fidelity", "redraw_strength", "redraw_noise"}:
                 number = float(value)
                 ceiling = 30 if normalized == "scale" else 1
                 if not 0 <= number <= ceiling:
@@ -379,7 +390,8 @@ class NaiCommand(BaseCommand):
         if not prompt.strip():
             help_text = (
                 "用法：/nai <中文描述或逗号分隔的 Tag>\n"
-                "/nai 参考、重绘、放大：先回复目标图片消息\n"
+                "/nai 参考、精确参考、重绘、局部重绘、放大：先回复目标图片消息\n"
+                "/nai 精确参考 [角色|风格|角色风格] <提示词>：NAI 4.5 角色/画风参考\n"
                 "/nai 导演 <req_type> [defry] [提示词]：调用原生 Director Tools\n"
                 "/nai 反推：反推被回复图片的 Tag\n"
                 "/nai 历史 [数量]：查看本聊天图片记录\n"
@@ -411,6 +423,13 @@ class NaiCommand(BaseCommand):
     async def _replied_image(self) -> tuple[bytes, str, Any | None, str]:
         """只从当前命令明确引用的消息中读取图片。"""
 
+        images, source_message_id, target = await self._replied_images()
+        image_data, extension = images[0]
+        return image_data, source_message_id, target, extension
+
+    async def _replied_images(self) -> tuple[list[tuple[bytes, str]], str, Any | None]:
+        """读取被明确引用消息中的所有图片，不搜索最近图片作为替代。"""
+
         config = self._config()
         if config is None:
             raise RuntimeError("mofox_nai 配置尚未加载")
@@ -430,7 +449,7 @@ class NaiCommand(BaseCommand):
                     message_images, target, max(1024, config.archive.max_image_bytes)
                 )
                 if images:
-                    return images[0][0], reply_to, target, images[0][1]
+                    return images, reply_to, target
                 break
             if len(page) < 1000:
                 break
@@ -438,9 +457,11 @@ class NaiCommand(BaseCommand):
         if archive_is_enabled(config):
             record = get_image_record(config, stream_id=self.stream_id, message_id=reply_to)
             if record:
-                return await asyncio.to_thread(read_image_file, record), reply_to, None, Path(
+                image_data = await asyncio.to_thread(read_image_file, record)
+                extension = Path(
                     str(record.get("file_path", "image.png"))
                 ).suffix or ".png"
+                return [(image_data, extension)], reply_to, None
         raise LookupError("被引用的消息里没有可读取的图片；请直接回复原图片消息。")
 
     async def _notify_work(self, service: MofoxNaiService, activity: str) -> None:
@@ -482,13 +503,20 @@ class NaiCommand(BaseCommand):
             return False, message
         service = MofoxNaiService(config)
         try:
-            source_image, source_message_id, _, _ = await self._replied_image()
+            if operation == "reference":
+                quoted_images, source_message_id, _ = await self._replied_images()
+                source_image = quoted_images[0][0]
+                reference_images = [image_data for image_data, _ in quoted_images]
+            else:
+                source_image, source_message_id, _, _ = await self._replied_image()
+                reference_images = None
             await self._notify_work(service, {"reference": "参考图生成", "redraw": "图片重绘", "inpaint": "局部重绘"}[operation])
             result, final_prompt = await service.generate_image(
                 prompt,
                 operation=operation,
                 source_image=source_image,
                 mask_image=mask_image,
+                reference_images=reference_images,
             )
             sent = await send_image(
                 image_data=base64.b64encode(result).decode("ascii"),
@@ -550,6 +578,70 @@ class NaiCommand(BaseCommand):
         """引用目标图片做 Vibe Transfer 风格参考。"""
 
         return await self._run_referenced_generation(self._remainder("参考"), "reference")
+
+    @cmd_route("精确参考")
+    async def handle_precise_reference(self) -> tuple[bool, str]:
+        """使用 NAI 4.5 Precise Reference 保持引用角色或画风。"""
+
+        config = self._config()
+        if config is None:
+            return False, "mofox_nai 配置尚未加载"
+        raw = self._remainder("精确参考").strip()
+        if not raw:
+            message = (
+                "用法：回复含参考图的消息后发送 /nai 精确参考 [角色|风格|角色风格] <提示词>。"
+                "仅支持 NAI 4.5；多张引用图会全部用作参考。"
+            )
+            await self._reply(message, title="NAI 精确参考", status="NEED INPUT", accent=CYAN)
+            return False, message
+        try:
+            parts = shlex.split(raw)
+            type_aliases = {
+                "角色": "character",
+                "character": "character",
+                "人物": "character",
+                "风格": "style",
+                "画风": "style",
+                "style": "style",
+                "角色风格": "character&style",
+                "角色和风格": "character&style",
+                "character&style": "character&style",
+            }
+            mode = type_aliases.get(parts[0].casefold())
+            if mode:
+                reference_type = mode
+                prompt = " ".join(parts[1:])
+            else:
+                reference_type = "character"
+                prompt = raw
+            if not prompt.strip():
+                raise ValueError("请在参考类型后填写提示词")
+
+            service = MofoxNaiService(config)
+            if not service.supports_precise_reference():
+                raise ValueError("NAI Precise Reference 仅支持 NAI 4.5 模型；请用 /nai 模型 切换到 4.5")
+            quoted_images, source_message_id, _ = await self._replied_images()
+            await self._notify_work(service, "NAI 4.5 精确参考生成")
+            result, final_prompt = await service.generate_image(
+                prompt,
+                operation="precise_reference",
+                reference_images=[image_data for image_data, _ in quoted_images],
+                precise_reference_type=reference_type,
+            )
+            sent = await send_image(
+                image_data=base64.b64encode(result).decode("ascii"),
+                stream_id=self.stream_id,
+                platform=getattr(self._message, "platform", None),
+                processed_plain_text=f"[NAI 精确参考 · {reference_type}: {final_prompt[:100]}]",
+                reply_to=source_message_id,
+            )
+            if not sent:
+                raise RuntimeError("平台没有成功发送精准参考生成图片")
+            return True, f"精准参考生成完成：{final_prompt[:300]}"
+        except Exception as error:
+            logger.error("NAI 精确参考失败", exc_info=error)
+            await self._reply(f"精准参考失败：{error}", title="NAI 精确参考", status="ERROR", accent=RED)
+            return False, str(error)
 
     @cmd_route("重绘")
     async def handle_redraw(self) -> tuple[bool, str]:
@@ -848,7 +940,8 @@ class NaiCommand(BaseCommand):
 
         message = (
             "/nai <自然语言或 Tag>：生成图片\n"
-            "/nai 参考、重绘、局部重绘、放大：回复目标图片后处理\n"
+            "/nai 参考、精确参考、重绘、局部重绘、放大：回复目标图片后处理\n"
+            "/nai 精确参考 [角色|风格|角色风格] <提示词>：仅支持 NAI 4.5\n"
             "/nai 导演 <req_type> [defry] [提示词]：调用 NAI 原生 Director Tools\n"
             "/nai 描述：描述回复的图片；/nai 反推：反推回复图片 Tag\n"
             "/nai 历史 [数量]：查看本聊天图片（免保存模式只读核心历史）\n"

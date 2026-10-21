@@ -7,6 +7,8 @@
 | `plugin` | `enabled` | `true` | 插件总开关 |
 | `plugin` | `action_enabled` | `true` | 是否注册 LLM 生图 Action |
 | `plugin` | `tools_enabled` | `true` | 是否注册图库、数据库和 Danbooru 查询工具 |
+| `plugin` | `group_whitelist` / `group_blacklist` | 空列表 / 空列表 | 群号白名单与黑名单；白名单非空时仅名单内群可用，黑名单优先 |
+| `plugin` | `private_whitelist` / `private_blacklist` | 空列表 / 空列表 | 私聊用户 ID 白名单与黑名单；白名单非空时仅名单内用户可用，黑名单优先 |
 | `generation` | `base_url` | `http://127.0.0.1:31555/v1` | 生图 API 根地址；按协议拼接端点，也可直接填写完整端点 |
 | `generation` | `api_format` | `auto` | `auto` 按模型名和 URL 路径判断；也可指定 `openai` 或 NovelAI 原生格式 `novelai` |
 | `generation` | `api_key` | 空 | 生图 API Token |
@@ -15,6 +17,11 @@
 | `generation` | `prompt_format` | `auto` | `auto` 对 NAI V5 由翻译模型选择英文自然语言或 Tag，其他模型输出 Tag；NAI 4.5 始终输出 Tag |
 | `generation` | `width` / `height` | `832` / `1216` | 生图尺寸 |
 | `generation` | `steps` / `scale` | `28` / `5.0` | 采样参数 |
+| `generation` | `request_mode` | `parallel` | `parallel` 并发请求，`queue` 串行排队；也可用 `/nai 设置 并发 排队/并行` 切换 |
+| `generation` | `reference_strength` / `reference_information` | `0.6` / `0.6` | Vibe Transfer 参考强度与信息提取比例 |
+| `generation` | `precise_reference_strength` / `precise_reference_fidelity` | `1.0` / `1.0` | NAI 4.5 Precise Reference 强度与忠实度，范围 0–1 |
+| `generation` | `redraw_strength` / `redraw_noise` | `0.65` / `0.2` | img2img 重绘强度与噪声 |
+| `generation` | `sampler` / `noise_schedule` / `seed` | `k_euler_ancestral` / `karras` / `-1` | NAI 原生采样设置；`-1` 表示随机种子 |
 | `generation` | `negative_prompt` | 常用质量排除词 | 默认负面提示词 |
 | `models` | `base_url` / `api_key` | 本地 `/v1` / 空 | Chat Completions 与视觉模型 API |
 | `models` | `vision_model` | 空 | 图片 Tag 反推、视觉描述必填；也可作为翻译与人设状态通知模型 |
@@ -53,6 +60,10 @@ Qdrant 查询 API 使用 `POST /collections/{collection}/points/query`，索引�
 `api_format = "openai"` 使用 `POST /images/generations`，接受 OpenAI 风格的 `data[0].b64_json` 或 `data[0].url`。`api_format = "novelai"` 使用 `POST /ai/generate-image` 与 NovelAI 原生请求格式，通过 `Accept: application/json` 优先接收 `images[].image` Base64，也能直接读取原生 ZIP 图片响应。`auto` 对 `nai-diffusion-*` 模型且 URL 中不含 `/v1` 的配置选择原生格式；包含 `/v1` 则选择 OpenAI 兼容格式。对于 NAI 原生服务，请显式指定 `novelai`；可用 `/nai 设置 协议 novelai` 实时切换。
 
 引用图片可使用原生 `/ai/augment-image` Director Tools：`/nai 导演 <req_type> [defry] [提示词]`。请先回复目标图片；`req_type` 由所连接的 NAI 服务决定，插件不会猜测或改写不同服务版本的工具枚举。
+
+`/nai 参考 <提示词>` 使用 Vibe Transfer，支持回复消息中的多张图片；`/nai 精确参考 [角色|风格|角色风格] <提示词>` 使用 NovelAI Precise Reference，只支持 NAI 4.5 模型，且不能与 Vibe Transfer 同时用于一次请求。两种参考命令都只从明确回复的消息读取图片。精准参考的强度与忠实度可用 `/nai 设置 精准参考强度 <0-1>` 和 `/nai 设置 精准参考忠实度 <0-1>` 实时调整。
+
+访问名单分别针对群聊和私聊：各自的白名单为空时不限制该类会话；填写白名单后仅名单内群号/用户 ID 可使用命令、LLM 工具和 Action。黑名单始终生效并优先于白名单；被屏蔽会话也不会进入本插件的图片归档。名单通过 `[plugin]` 配置，修改后重载插件或重启 MoFox 生效。
 
 ### 免保存模式
 

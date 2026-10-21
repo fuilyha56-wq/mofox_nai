@@ -12,6 +12,7 @@ from src.app.plugin_system.api.send_api import send_image
 from src.app.plugin_system.base import BaseAction
 from src.kernel.logger import get_logger
 
+from .access import chat_access
 from .config import MofoxNaiConfig
 from .archive import message_images
 from .service import MofoxNaiService
@@ -43,12 +44,15 @@ class GenerateNaiImageAction(BaseAction):
         config = self.plugin.config
         if not isinstance(config, MofoxNaiConfig):
             return False, "mofox_nai 配置尚未加载"
+        context = getattr(self.chat_stream, "context", None)
+        current_message = getattr(context, "current_message", None) if context else None
+        allowed, reason = chat_access(config, current_message)
+        if not allowed:
+            return False, reason
         try:
             source_image = None
             source_message_id = None
             if image_mode != "generate":
-                context = getattr(self.chat_stream, "context", None)
-                current_message = getattr(context, "current_message", None) if context else None
                 reply_to = str(getattr(current_message, "reply_to", "") or "").strip()
                 target = self._find_context_message(reply_to) if reply_to else None
                 if target is None or not reply_to:

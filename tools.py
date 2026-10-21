@@ -10,6 +10,7 @@ from typing import Annotated
 from src.app.plugin_system.base import BaseTool
 from src.kernel.logger import get_logger
 
+from .access import chat_access
 from .archive import list_core_image_messages, search_local_images
 from .config import MofoxNaiConfig, archive_is_enabled
 from .service import MofoxNaiService
@@ -22,6 +23,13 @@ def _config(plugin: object) -> MofoxNaiConfig | None:
 
     value = getattr(plugin, "config", None)
     return value if isinstance(value, MofoxNaiConfig) else None
+
+
+def _access_error(tool: BaseTool, config: MofoxNaiConfig) -> str | None:
+    """检查当前工具调用是否来自允许的群聊或私聊。"""
+
+    allowed, reason = chat_access(config, getattr(tool, "trigger_message", None))
+    return None if allowed else reason
 
 
 class SearchImageHistoryTool(BaseTool):
@@ -40,6 +48,9 @@ class SearchImageHistoryTool(BaseTool):
         config = _config(self.plugin)
         if config is None:
             return False, "mofox_nai 配置尚未加载"
+        denied = _access_error(self, config)
+        if denied:
+            return False, denied
         try:
             if archive_is_enabled(config):
                 rows = search_local_images(config, self.get_current_stream_id(), query, limit)
@@ -80,6 +91,9 @@ class SearchImageDatabaseTool(BaseTool):
         config = _config(self.plugin)
         if config is None:
             return False, "mofox_nai 配置尚未加载"
+        denied = _access_error(self, config)
+        if denied:
+            return False, denied
         try:
             rows = await MofoxNaiService(config).search_database(
                 query=query,
@@ -108,6 +122,9 @@ class SearchDanbooruTool(BaseTool):
         config = _config(self.plugin)
         if config is None:
             return False, "mofox_nai 配置尚未加载"
+        denied = _access_error(self, config)
+        if denied:
+            return False, denied
         try:
             posts = await MofoxNaiService(config).search_danbooru(tags, limit)
         except Exception as error:

@@ -23,6 +23,22 @@ class MofoxNaiConfig(BaseConfig):
         enabled: bool = Field(default=True, description="是否启用插件")
         action_enabled: bool = Field(default=True, description="是否向 LLM 提供生图 Action")
         tools_enabled: bool = Field(default=True, description="是否向 LLM 提供图库、向量库及 Danbooru 查询工具")
+        group_whitelist: list[str] = Field(
+            default_factory=list,
+            description="群聊白名单；留空表示不启用白名单，填写后仅允许名单内群使用插件",
+        )
+        group_blacklist: list[str] = Field(
+            default_factory=list,
+            description="群聊黑名单；名单内群禁止使用插件，黑名单优先于白名单",
+        )
+        private_whitelist: list[str] = Field(
+            default_factory=list,
+            description="私聊白名单（QQ 用户 ID）；留空表示不启用白名单，填写后仅允许名单内用户使用插件",
+        )
+        private_blacklist: list[str] = Field(
+            default_factory=list,
+            description="私聊黑名单（QQ 用户 ID）；名单内用户禁止使用插件，黑名单优先于白名单",
+        )
         settings_admin_ids: list[str] = Field(
             default_factory=list,
             description="允许通过聊天命令修改生图设置和预设的用户 ID",
@@ -58,6 +74,8 @@ class MofoxNaiConfig(BaseConfig):
         noise_schedule: str = Field(default="karras", description="NAI 原生噪声调度")
         reference_strength: float = Field(default=0.6, ge=0, le=1, description="参考图风格强度，范围 0–1")
         reference_information: float = Field(default=0.6, ge=0, le=1, description="参考图信息提取量，范围 0–1")
+        precise_reference_strength: float = Field(default=1.0, ge=0, le=1, description="NAI 4.5 Precise Reference 强度，范围 0–1")
+        precise_reference_fidelity: float = Field(default=1.0, ge=0, le=1, description="NAI 4.5 Precise Reference 忠实度，范围 0–1")
         redraw_strength: float = Field(default=0.65, ge=0, le=1, description="重绘保留原图程度，范围 0–1")
         redraw_noise: float = Field(default=0.2, ge=0, le=1, description="重绘噪声比例，范围 0–1")
         negative_prompt: str = Field(default="lowres, worst quality, bad quality, jpeg artifacts, bad hands, extra digits, watermark, signature", description="默认负面提示词")

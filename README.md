@@ -5,7 +5,7 @@
 ## 能力
 
 - `/nai <中文描述或 Tag>` 支持 OpenAI 兼容的 `/images/generations` 与 NovelAI 原生 `/ai/generate-image` 两种接口。
-- 引用图支持 Vibe Transfer、img2img 重绘、遮罩局部重绘、独立放大与 NAI 原生 Director Tools 增强。
+- 引用图支持多图 Vibe Transfer、NAI 4.5 Precise Reference（角色/画风）、img2img 重绘、遮罩局部重绘、独立放大与 NAI 原生 Director Tools 增强。
 - 自然语言提示词通过配置的翻译模型转换后再生图；直接输入 Tag 时原样使用。NAI 4.5 固定转换为英文 Tag，NAI V5 在英文自然语言描述与 Tag 之间自动选择。
 - 生图和图片处理命令会先读取 Core 人格，让配置模型现场生成状态消息；状态消息生成或发送失败时会取消图片请求。
 - `/nai 反推` 只读取明确回复的图片消息，调用视觉模型反推 Tag，并以引用消息发送结果。
@@ -14,6 +14,7 @@
 - 可选的四角文字水印支持左上、右上、左下、右下位置，字体优先使用 **Noto Sans SC, sans-serif**。
 - LLM 可调用图片历史、Qdrant 向量库、只读 SQLite NAI Tag 目录和 Danbooru 查询工具。Qdrant 语义搜索需要配置 OpenAI 兼容 Embeddings API；Tag SQLite 使用数据库自带的 FTS5 索引。
 - Danbooru 默认强制 `rating:s`，可选配置用户名和 API Key。
+- 群聊和私聊可分别配置 ID 白名单与黑名单；非空白名单限制可用会话，黑名单优先，并作用于命令、LLM 工具、Action 与图片归档。
 
 ## 命令
 
@@ -22,6 +23,7 @@
 | `/nai <提示词>` | 自然语言或 Tag 生图 |
 | `/nai 生图 <提示词>` | 显式生图 |
 | `/nai 参考 <提示词>` | 对引用图片进行 Vibe Transfer 风格参考 |
+| `/nai 精确参考 [角色\|风格\|角色风格] <提示词>` | NAI 4.5 Precise Reference；引用消息图片作为角色或画风参考 |
 | `/nai 重绘 <提示词>` | 对引用图片进行 img2img 重绘 |
 | `/nai 局部重绘 <提示词>` | 对引用图片按命令附带的遮罩进行局部重绘 |
 | `/nai 导演 <req_type> [defry] [提示词]` | 调用原生 Director Tools 处理引用图片；`req_type` 由当前 NAI 服务定义 |
@@ -39,6 +41,18 @@
 ## 安装与配置
 
 把 `mofox_nai` 目录放到 MoFox 的 `plugins/` 下。启用后插件管理器会生成 `config/plugins/mofox_nai/config.toml`。先配置生图接口：
+
+群聊和私聊名单分别填写在 `[plugin]` 节。白名单留空表示该类会话不受白名单限制；黑名单始终生效。名单匹配 QQ 原始群号或用户 ID，而不是 MoFox 的哈希 `stream_id`：
+
+```toml
+[plugin]
+group_whitelist = ["1094860211"]
+group_blacklist = []
+private_whitelist = []
+private_blacklist = ["123456789"]
+```
+
+以上示例只允许指定群使用插件，并屏蔽指定的私聊用户。名单同时限制 `/nai` 命令、LLM 查询工具、生图 Action 和图片自动归档。修改后重载插件或重启 MoFox。
 
 ```toml
 [generation]

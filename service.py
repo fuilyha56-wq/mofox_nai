@@ -149,6 +149,11 @@ class MofoxNaiService:
         is_nai_model = generation.model.strip().casefold().startswith("nai-diffusion-")
         return "novelai" if is_nai_model and not has_openai_version else "openai"
 
+    def supports_precise_reference(self) -> bool:
+        """Precise Reference is only available on NovelAI Diffusion V4.5 models."""
+
+        return bool(re.search(r"(?:4[._ -]?5|v4[._ -]?5)", self.config.generation.model, re.IGNORECASE))
+
     @staticmethod
     def _native_image_request(
         model: str,
@@ -167,6 +172,10 @@ class MofoxNaiService:
         reference_information: float = 0.6,
         redraw_strength: float = 0.65,
         redraw_noise: float = 0.2,
+        reference_images: list[bytes] | None = None,
+        precise_reference_type: str = "character",
+        precise_reference_strength: float = 1.0,
+        precise_reference_fidelity: float = 1.0,
         seed: int = -1,
     ) -> dict[str, Any]:
         """构造 NovelAI 图像 API 使用的原生请求结构。"""
@@ -192,37 +201,82 @@ class MofoxNaiService:
         }
         if seed >= 0:
             parameters["seed"] = seed
-        if source_image is not None:
-            encoded_image = base64.b64encode(source_image).decode("ascii")
-            if operation == "reference":
+        if operation == "reference":
+            references = reference_images or ([source_image] if source_image is not None else [])
+            if not references:
+                raise ValueError("Vibe Transfer 需要至少一张明确引用的图片")
+            if len(references) > 16:
+                raise ValueError("NovelAI Vibe Transfer 一次最多支持 16 张参考图")
+            encoded_references = [base64.b64encode(image).decode("ascii") for image in references]
+            if len(encoded_references) == 1:
                 parameters.update(
                     {
-                        "reference_image": encoded_image,
+                        "reference_image": encoded_references[0],
                         "reference_strength": reference_strength,
                         "reference_information_extracted": reference_information,
                     }
                 )
-            elif operation in {"redraw", "inpaint"}:
+            else:
                 parameters.update(
                     {
-                        "image": encoded_image,
-                        "strength": redraw_strength,
-                        "noise": redraw_noise,
-                        "img2img": {
-                            "strength": redraw_strength,
-                            "noise": redraw_noise,
-                            "color_correct": True,
-                        },
+                        "reference_image_multiple": encoded_references,
+                        "reference_strength_multiple": [reference_strength] * len(references),
+                        "reference_information_extracted_multiple": [reference_information] * len(references),
                     }
                 )
-                if operation == "inpaint":
-                    if mask_image is None:
-                        raise ValueError("局部重绘需要在命令消息中附加遮罩图片")
-                    parameters["mask"] = base64.b64encode(mask_image).decode("ascii")
-            else:
-                raise ValueError(f"不支持的原生图片操作：{operation}")
+        elif operation == "precise_reference":
+            references = reference_images or ([source_image] if source_image is not None else [])
+            if not references:
+                raise ValueError("Precise Reference 需要至少一张明确引用的图片")
+            if precise_reference_type not in {"character", "style", "character&style"}:
+                raise ValueError("精准参考类型必须为 character、style 或 character&style")
+            if not 0 <= precise_reference_strength <= 1 or not 0 <= precise_reference_fidelity <= 1:
+                raise ValueError("精准参考强度与忠实度必须在 0–1 之间")
+            parameters.update(
+                {
+                    "director_reference_images": [
+                        base64.b64encode(image).decode("ascii") for image in references
+                    ],
+                    "director_reference_descriptions": [
+                        {
+                            "caption": {
+                                "base_caption": precise_reference_type,
+                                "char_captions": [],
+                            }
+                        }
+                        for _ in references
+                    ],
+                    "director_reference_information_extracted": [1.0] * len(references),
+                    "director_reference_strength_values": [
+                        precise_reference_strength
+                    ] * len(references),
+                    "director_reference_secondary_strength_values": [
+                        precise_reference_fidelity
+                    ] * len(references),
+                }
+            )
+        elif operation in {"redraw", "inpaint"}:
+            if source_image is None:
+                raise ValueError(f"{operation} 操作需要引用图片")
+            encoded_image = base64.b64encode(source_image).decode("ascii")
+            parameters.update(
+                {
+                    "image": encoded_image,
+                    "strength": redraw_strength,
+                    "noise": redraw_noise,
+                    "img2img": {
+                        "strength": redraw_strength,
+                        "noise": redraw_noise,
+                        "color_correct": True,
+                    },
+                }
+            )
+            if operation == "inpaint":
+                if mask_image is None:
+                    raise ValueError("局部重绘需要在命令消息中附加遮罩图片")
+                parameters["mask"] = base64.b64encode(mask_image).decode("ascii")
         elif operation != "generate":
-            raise ValueError(f"{operation} 操作需要引用图片")
+            raise ValueError(f"不支持的原生图片操作：{operation}")
         if re.search(r"nai[-_ ]?diffusion[-_ ]?(?:4(?:[-_. ]?5)?|5)", model, re.IGNORECASE):
             parameters["v4_prompt"] = {
                 "caption": {"base_caption": prompt, "char_captions": []},
@@ -363,6 +417,8 @@ class MofoxNaiService:
         reference_information: float | None = None,
         redraw_strength: float | None = None,
         redraw_noise: float | None = None,
+        reference_images: list[bytes] | None = None,
+        precise_reference_type: str = "character",
     ) -> tuple[bytes, str]:
         """调用选定的生图协议并应用可选水印。"""
 
@@ -374,6 +430,8 @@ class MofoxNaiService:
         api_format = self._generation_api_format()
         if operation != "generate" and api_format != "novelai":
             raise ValueError("参考图、重绘和局部重绘需要 [generation].api_format = 'novelai'")
+        if operation == "precise_reference" and not self.supports_precise_reference():
+            raise ValueError("NAI Precise Reference 仅支持 NAI 4.5 模型；Vibe Transfer 可使用 /nai 参考")
         if api_format == "novelai":
             endpoint = self._api_url(generation.base_url, "/ai/generate-image")
             headers = {
@@ -381,23 +439,35 @@ class MofoxNaiService:
                 "Accept": "application/json",
             }
             body = self._native_image_request(
-                generation.model,
-                prepared_prompt,
-                final_negative_prompt,
-                generation.width,
-                generation.height,
-                generation.steps,
-                generation.scale,
-                generation.sampler,
-                generation.noise_schedule,
-                operation,
-                source_image,
-                mask_image,
-                generation.reference_strength if reference_strength is None else reference_strength,
-                generation.reference_information if reference_information is None else reference_information,
-                generation.redraw_strength if redraw_strength is None else redraw_strength,
-                generation.redraw_noise if redraw_noise is None else redraw_noise,
-                generation.seed,
+                model=generation.model,
+                prompt=prepared_prompt,
+                negative_prompt=final_negative_prompt,
+                width=generation.width,
+                height=generation.height,
+                steps=generation.steps,
+                scale=generation.scale,
+                sampler=generation.sampler,
+                noise_schedule=generation.noise_schedule,
+                operation=operation,
+                source_image=source_image,
+                mask_image=mask_image,
+                reference_strength=(
+                    generation.reference_strength if reference_strength is None else reference_strength
+                ),
+                reference_information=(
+                    generation.reference_information
+                    if reference_information is None
+                    else reference_information
+                ),
+                redraw_strength=(
+                    generation.redraw_strength if redraw_strength is None else redraw_strength
+                ),
+                redraw_noise=generation.redraw_noise if redraw_noise is None else redraw_noise,
+                reference_images=reference_images,
+                precise_reference_type=precise_reference_type,
+                precise_reference_strength=generation.precise_reference_strength,
+                precise_reference_fidelity=generation.precise_reference_fidelity,
+                seed=generation.seed,
             )
         else:
             endpoint = self._api_url(generation.base_url, "/images/generations")
@@ -433,6 +503,16 @@ class MofoxNaiService:
                             "OpenAI 兼容生图端点返回 404。若服务使用 NAI 原生接口，请执行 /nai 设置 协议 novelai，"
                             "或在配置中设置 api_format = \"novelai\" 后重启 MoFox。"
                         ) from error
+                    detail = " ".join(str(getattr(response, "text", "") or "").split())[:1200]
+                    if api_format == "novelai":
+                        reason = str(getattr(response, "reason_phrase", "") or "").strip()
+                        status = f"HTTP {response.status_code} {reason}".strip()
+                        message = f"NovelAI 原生生图接口返回 {status}"
+                        if response.status_code == 502:
+                            message += "；网关未能从后端取得有效响应，请检查代理上游和生图服务状态"
+                        if detail:
+                            message += f"。服务端响应：{detail}"
+                        raise ValueError(message) from error
                     raise
                 if api_format == "novelai":
                     return await self._extract_native_image(response, client)

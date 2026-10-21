@@ -14,6 +14,7 @@ from src.kernel.concurrency import get_task_manager
 from src.kernel.event import EventDecision
 from src.kernel.logger import get_logger
 
+from .access import chat_access
 from .archive import archive_image, message_images, update_image_description
 from .config import MofoxNaiConfig, archive_is_enabled
 from .service import MofoxNaiService
@@ -38,6 +39,9 @@ class ArchiveChatImagesHandler(BaseEventHandler):
             return EventDecision.PASS, params
         message = params.get("message")
         if message is None:
+            return EventDecision.PASS, params
+        allowed, _ = chat_access(config, message)
+        if not allowed:
             return EventDecision.PASS, params
 
         max_bytes = max(1024, config.archive.max_image_bytes)

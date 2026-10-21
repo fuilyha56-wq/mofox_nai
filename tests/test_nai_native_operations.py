@@ -32,11 +32,14 @@ class _Response:
         content: bytes = b"",
         headers: dict[str, str] | None = None,
         status_code: int = 200,
+        text: str = "",
     ) -> None:
         self._payload = payload
         self.content = content
         self.headers = headers or {"content-type": "application/json"}
         self.status_code = status_code
+        self.text = text
+        self.reason_phrase = {404: "Not Found", 502: "Bad Gateway"}.get(status_code, "")
         self.request = httpx.Request("POST", "https://nai.test/ai/generate-image")
 
     def raise_for_status(self) -> None:
@@ -134,6 +137,66 @@ class NativeOperationTests(unittest.TestCase):
         self.assertEqual(params["reference_information_extracted"], 0.63)
         self.assertNotIn("image", params)
         self.assertEqual(result, b"generated-image")
+
+    def test_vibe_transfer_supports_multiple_images_from_one_quoted_message(self) -> None:
+        _Client.responses = [_native_image_response()]
+        with patch("plugins.mofox_nai.service.httpx.AsyncClient", _Client):
+            _run_immediate(
+                MofoxNaiService(self.config).generate_image(
+                    "1girl",
+                    operation="reference",
+                    reference_images=[b"style-one", b"style-two"],
+                    reference_strength=0.7,
+                    reference_information=0.8,
+                )
+            )
+
+        params = _Client.requests[0][1]["json"]["parameters"]
+        self.assertEqual(
+            params["reference_image_multiple"],
+            [base64.b64encode(b"style-one").decode(), base64.b64encode(b"style-two").decode()],
+        )
+        self.assertEqual(params["reference_strength_multiple"], [0.7, 0.7])
+        self.assertEqual(params["reference_information_extracted_multiple"], [0.8, 0.8])
+        self.assertNotIn("reference_image", params)
+
+    def test_precise_reference_sends_native_character_and_style_fields(self) -> None:
+        self.config.generation.model = "nai-diffusion-4-5-full"
+        self.config.generation.precise_reference_strength = 0.75
+        self.config.generation.precise_reference_fidelity = 0.4
+        _Client.responses = [_native_image_response()]
+
+        with patch("plugins.mofox_nai.service.httpx.AsyncClient", _Client):
+            _run_immediate(
+                MofoxNaiService(self.config).generate_image(
+                    "1girl, blue_hair",
+                    operation="precise_reference",
+                    reference_images=[b"character-ref", b"style-ref"],
+                    precise_reference_type="character&style",
+                )
+            )
+
+        params = _Client.requests[0][1]["json"]["parameters"]
+        self.assertEqual(
+            params["director_reference_images"],
+            [base64.b64encode(b"character-ref").decode(), base64.b64encode(b"style-ref").decode()],
+        )
+        self.assertEqual(
+            [item["caption"]["base_caption"] for item in params["director_reference_descriptions"]],
+            ["character&style", "character&style"],
+        )
+        self.assertEqual(params["director_reference_information_extracted"], [1.0, 1.0])
+        self.assertEqual(params["director_reference_strength_values"], [0.75, 0.75])
+        self.assertEqual(params["director_reference_secondary_strength_values"], [0.4, 0.4])
+
+    def test_precise_reference_is_rejected_for_v5_before_network_request(self) -> None:
+        with self.assertRaisesRegex(ValueError, "仅支持 NAI 4.5"):
+            _run_immediate(
+                MofoxNaiService(self.config).generate_image(
+                    "1girl", operation="precise_reference", source_image=b"reference"
+                )
+            )
+        self.assertEqual(_Client.requests, [])
 
     def test_redraw_and_inpaint_send_source_and_mask_images(self) -> None:
         _Client.responses = [_native_image_response(), _native_image_response()]
@@ -240,6 +303,29 @@ class NativeOperationTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "已发送 NovelAI 原生格式"):
                 _run_immediate(MofoxNaiService(self.config).generate_image("1girl"))
         self.assertEqual(_Client.requests[0][0], "https://nai.test/ai/generate-image")
+
+    def test_native_502_includes_gateway_response_for_diagnosis(self) -> None:
+        _Client.responses = [
+            _Response(status_code=502, text='{"error":"upstream unavailable"}')
+        ]
+        with patch("plugins.mofox_nai.service.httpx.AsyncClient", _Client):
+            with self.assertRaisesRegex(ValueError, "HTTP 502 Bad Gateway.*upstream unavailable"):
+                _run_immediate(MofoxNaiService(self.config).generate_image("1girl"))
+        self.assertEqual(_Client.requests[0][0], "https://nai.test/ai/generate-image")
+
+    def test_auto_protocol_uses_native_endpoint_for_bare_nai_model_url(self) -> None:
+        self.config.generation.api_format = "auto"
+        self.config.generation.base_url = "https://nai.test"
+        _Client.responses = [_native_image_response()]
+
+        with patch("plugins.mofox_nai.service.httpx.AsyncClient", _Client):
+            _run_immediate(MofoxNaiService(self.config).generate_image("1girl"))
+
+        url, request = _Client.requests[0]
+        self.assertEqual(url, "https://nai.test/ai/generate-image")
+        self.assertEqual(request["json"]["action"], "generate")
+        self.assertEqual(request["json"]["model"], "nai-diffusion-5-full")
+        self.assertIn("parameters", request["json"])
 
     def test_work_notice_uses_core_persona_and_text_model_output(self) -> None:
         self.config.generation.prompt_model = "translator"
@@ -416,7 +502,44 @@ class NativeOperationTests(unittest.TestCase):
         )
         self.assertEqual(send.await_args.kwargs["reply_to"], "quoted-message")
 
-    def test_replied_image_reads_only_the_exact_reply_target(self) -> None:
+    def test_precise_reference_command_uses_all_images_from_exact_reply(self) -> None:
+        self.config.generation.model = "nai-diffusion-4-5-full"
+        command = SimpleNamespace(
+            _config=lambda: self.config,
+            _remainder=lambda _: "style 1girl, blue_hair",
+            _message=SimpleNamespace(platform="qq"),
+            _replied_images=AsyncMock(
+                return_value=(
+                    [(b"quoted-char", ".png"), (b"quoted-style", ".png")],
+                    "quoted-message",
+                    object(),
+                )
+            ),
+            _notify_work=AsyncMock(),
+            stream_id="precise-stream",
+        )
+        with (
+            patch(
+                "plugins.mofox_nai.commands.MofoxNaiService.generate_image",
+                new=AsyncMock(return_value=(b"generated", "1girl, blue_hair")),
+            ) as generate,
+            patch(
+                "plugins.mofox_nai.commands.send_image",
+                new=AsyncMock(return_value=True),
+            ) as send,
+        ):
+            ok, _ = _run_immediate(NaiCommand.handle_precise_reference(command))
+
+        self.assertTrue(ok)
+        generate.assert_awaited_once_with(
+            "1girl, blue_hair",
+            operation="precise_reference",
+            reference_images=[b"quoted-char", b"quoted-style"],
+            precise_reference_type="style",
+        )
+        self.assertEqual(send.await_args.kwargs["reply_to"], "quoted-message")
+
+    def test_replied_images_reads_only_the_exact_reply_target(self) -> None:
         config = self.config
         target = SimpleNamespace(message_id="quoted-id")
         command = SimpleNamespace(
@@ -439,9 +562,9 @@ class NativeOperationTests(unittest.TestCase):
                 new=_async_immediate,
             ),
         ):
-            result = _run_immediate(NaiCommand._replied_image(command))
+            result = _run_immediate(NaiCommand._replied_images(command))
 
-        self.assertEqual(result[:2], (b"quoted-only", "quoted-id"))
+        self.assertEqual(result[:2], ([(b"quoted-only", ".png")], "quoted-id"))
         self.assertIs(result[2], target)
         get_messages.assert_awaited_once_with("group-stream", limit=1000, offset=0)
         extract_images.assert_called_once_with(target, max(1024, config.archive.max_image_bytes))
@@ -454,7 +577,7 @@ class NativeOperationTests(unittest.TestCase):
         )
         with patch("plugins.mofox_nai.commands.get_stream_messages", new=AsyncMock()) as get_messages:
             with self.assertRaisesRegex(LookupError, "回复目标图片"):
-                _run_immediate(NaiCommand._replied_image(command))
+                _run_immediate(NaiCommand._replied_images(command))
         get_messages.assert_not_awaited()
 
     def test_result_card_is_a_readable_png(self) -> None:

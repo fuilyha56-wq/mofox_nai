@@ -1,7 +1,7 @@
 {
   "name": "mofox_nai",
   "display_name": "MoFox NAI 图片创作与图库",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "description": "自然语言提示词翻译与 NAI 原生生图、引用图像处理、视觉反推、可选聊天图片归档、水印、Qdrant 向量检索、SQLite Tag 查询与 Danbooru 查询。",
   "author": "Lycoris radiata",
   "license": "AGPL-3.0-only",
